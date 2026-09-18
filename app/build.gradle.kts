@@ -36,6 +36,8 @@ android {
 }
 
 dependencies {
+    implementation("androidx.compose.material:material-icons-extended")
+    implementation("androidx.navigation:navigation-compose:2.7.7")
     implementation("com.mapbox.maps:android:11.30.1")
     implementation("com.mapbox.extension:maps-compose:11.30.1")
     implementation(platform(libs.androidx.compose.bom))

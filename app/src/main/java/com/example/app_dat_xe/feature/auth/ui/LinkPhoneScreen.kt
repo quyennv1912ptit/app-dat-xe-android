@@ -25,10 +25,23 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 import kotlin.time.Duration.Companion.milliseconds
+import android.app.Activity
+import android.widget.Toast
+import androidx.compose.ui.platform.LocalContext
+import com.google.firebase.FirebaseException
+import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.auth.PhoneAuthCredential
+import com.google.firebase.auth.PhoneAuthOptions
+import com.google.firebase.auth.PhoneAuthProvider
+import java.util.concurrent.TimeUnit
 
 @Composable
-fun LinkPhoneScreen(provider: String, onNavigateToOtp: (String) -> Unit) {
+fun LinkPhoneScreen(provider: String, onNavigateToOtp: (String) -> Unit
+                    , onLoginSuccess: () -> Unit) {
     var phoneNumber by remember { mutableStateOf("") }
+    val context = LocalContext.current
+    val activity = context as Activity
+    val auth = FirebaseAuth.getInstance()
     val focusRequester = remember { FocusRequester() }
 
     LaunchedEffect(Unit) {
@@ -70,14 +83,46 @@ fun LinkPhoneScreen(provider: String, onNavigateToOtp: (String) -> Unit) {
 
         Button(
             onClick = {
-                if (phoneNumber.isNotBlank()) {
-                    onNavigateToOtp(phoneNumber)
-                }
-            },
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(50.dp),
-            enabled = phoneNumber.isNotBlank()
+                if (phoneNumber.isBlank()) return@Button
+
+                val formattedPhone =
+                    if (phoneNumber.startsWith("0")) {
+                        "+84" + phoneNumber.substring(1)
+                    } else {
+                        phoneNumber
+                    }
+                val options = PhoneAuthOptions.newBuilder(auth)
+                    .setPhoneNumber(formattedPhone)
+                    .setTimeout(60L, TimeUnit.SECONDS)
+                    .setActivity(activity)
+                    .setCallbacks(
+                        object : PhoneAuthProvider.OnVerificationStateChangedCallbacks() {
+
+                            override fun onVerificationCompleted(
+                                credential: PhoneAuthCredential
+                            ) {
+                            }
+                            override fun onVerificationFailed(
+                                e: FirebaseException
+                            ) {
+                                Toast.makeText(
+                                    context,
+                                    "Gửi OTP thất bại: ${e.message}",
+                                    Toast.LENGTH_LONG
+                                ).show()
+                            }
+                            override fun onCodeSent(
+                                verificationId: String,
+                                token: PhoneAuthProvider.ForceResendingToken
+                            ) {
+                                OtpData.verificationId = verificationId
+                                onNavigateToOtp(formattedPhone)
+                            }
+                        }
+                    )
+                    .build()
+                PhoneAuthProvider.verifyPhoneNumber(options)
+            }
         ) {
             Text("Tiếp tục", style = MaterialTheme.typography.titleMedium)
         }

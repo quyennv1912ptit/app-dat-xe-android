@@ -20,11 +20,23 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    signingConfigs {
+        create("sharedDebug") {
+            storeFile = file("app-shared-debug.keystore")
+            storePassword = "ptitgo123"
+            keyAlias = "androiddebugkey"
+            keyPassword = "ptitgo123"
+        }
+    }
+
     buildTypes {
         release {
             optimization {
                 enable = false
             }
+        }
+        debug {
+            signingConfig = signingConfigs.getByName("sharedDebug")
         }
     }
     compileOptions {
@@ -34,6 +46,7 @@ android {
     buildFeatures {
         compose = true
     }
+
 }
 
 dependencies {

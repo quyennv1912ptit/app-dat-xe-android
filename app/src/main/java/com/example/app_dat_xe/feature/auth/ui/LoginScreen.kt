@@ -89,6 +89,7 @@ fun LoginScreen(onNavigateToOtp: (String, String) -> Unit
     var role by remember { mutableStateOf("CUSTOMER") }
     val context = LocalContext.current
     val webClientId = stringResource(R.string.default_web_client_id)
+    Log.d("GOOGLE_LOGIN", "webClientId = $webClientId")
     val activity = context as Activity
     val auth = FirebaseAuth.getInstance()
     val callbackManager = remember {
@@ -640,9 +641,9 @@ fun LoginScreen(onNavigateToOtp: (String, String) -> Unit
             val credentialManager = CredentialManager.create(context)
 
             val googleOption =
-                GetSignInWithGoogleOption.Builder(
-                    serverClientId = webClientId
-                )
+                GetGoogleIdOption.Builder()
+                    .setServerClientId(webClientId)
+                    .setFilterByAuthorizedAccounts(false)
                     .build()
 
             val request = GetCredentialRequest.Builder()

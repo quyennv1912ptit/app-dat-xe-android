@@ -31,6 +31,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import com.example.app_dat_xe.data.remote.LoginResponse
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -43,13 +44,25 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
+import android.widget.Toast
+import androidx.compose.ui.platform.LocalContext
+import com.example.app_dat_xe.data.remote.RegisterRequest
+import com.google.firebase.auth.FirebaseAuth
+import com.example.app_dat_xe.data.remote.RetrofitClient
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
 
 @Composable
-fun SignUpScreen(onSignUpSuccess: () -> Unit) {
-    var fullName by remember { mutableStateOf("") }
+fun SignUpScreen(role: String, onSignUpSuccess: (LoginResponse) -> Unit) {
+    var fullName by remember {
+        mutableStateOf(OtpData.facebookName ?: "")
+    }
     var email by remember { mutableStateOf("") }
     var isAgreed by remember { mutableStateOf(false) }
     var showTermsDialog by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+    val auth = FirebaseAuth.getInstance()
+    val scope = rememberCoroutineScope()
 
     if (showTermsDialog) {
         AlertDialog(
@@ -176,8 +189,70 @@ fun SignUpScreen(onSignUpSuccess: () -> Unit) {
 
         Button(
             onClick = {
-                /* TODO: Gọi API tạo tài khoản */
-                onSignUpSuccess()
+
+                val idToken = OtpData.phoneIdToken
+                val phoneNumber = OtpData.phoneNumber
+
+                if (idToken.isNullOrBlank() || phoneNumber.isNullOrBlank()) {
+                    Toast.makeText(
+                        context,
+                        "Chưa xác thực số điện thoại",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                    return@Button
+                }
+
+                val request = RegisterRequest(
+                    idToken = idToken,
+                    phoneNumber = phoneNumber,
+                    fullName = fullName,
+                    email = email.ifBlank { null },
+                    role = role,
+                    provider = "PHONE"
+                )
+
+                scope.launch {
+                    try {
+                        val response = RetrofitClient.api.register(request)
+
+                        if (response.isSuccessful) {
+
+                            val result = response.body()
+
+                            if (result != null) {
+                                Toast.makeText(
+                                    context,
+                                    "Đăng ký thành công",
+                                    Toast.LENGTH_SHORT
+                                ).show()
+
+                                OtpData.phoneIdToken = null
+                                OtpData.phoneNumber = null
+                                OtpData.verificationId = null
+
+                                onSignUpSuccess(result)
+                            }
+
+                        } else {
+
+                            val error = response.errorBody()?.string()
+
+                            Toast.makeText(
+                                context,
+                                error ?: "Đăng ký thất bại",
+                                Toast.LENGTH_LONG
+                            ).show()
+                        }
+
+                    } catch (e: Exception) {
+
+                        Toast.makeText(
+                            context,
+                            "Lỗi kết nối: ${e.message}",
+                            Toast.LENGTH_LONG
+                        ).show()
+                    }
+                }
             },
             modifier = Modifier
                 .fillMaxWidth()

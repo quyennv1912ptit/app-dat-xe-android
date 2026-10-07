@@ -7,6 +7,10 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Surface
 import androidx.compose.ui.Modifier
+import android.content.Intent
+import android.util.Log
+import com.facebook.FacebookSdk
+import com.example.app_dat_xe.feature.auth.ui.FacebookCallbackManagerHolder
 import androidx.compose.ui.unit.dp
 import com.example.app_dat_xe.feature.auth.ui.LoginScreen
 import com.mapbox.geojson.Point
@@ -16,6 +20,7 @@ import com.mapbox.maps.extension.compose.animation.viewport.rememberMapViewportS
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        FacebookSdk.sdkInitialize(applicationContext)
         setContent {
 
             Surface (
@@ -24,26 +29,6 @@ class MainActivity : ComponentActivity() {
                 AppNavigation()
             }
 
-//            MapboxMap(
-//                Modifier.fillMaxSize(),
-//                mapViewportState = rememberMapViewportState {
-//                    setCameraOptions {
-//                        zoom(2.0)
-//                        center(Point.fromLngLat(-98.0, 39.5))
-//                        pitch(0.0)
-//                        bearing(0.0)
-//                    }
-//                },
-//                scaleBar = {
-//                    ScaleBar(Modifier.padding(top = 60.dp))
-//                },
-//                logo = {
-//                    Logo(Modifier.padding(bottom = 40.dp))
-//                },
-//                attribution = {
-//                    Attribution(Modifier.padding(bottom = 40.dp))
-//                }
-//            )
         }
     }
 }

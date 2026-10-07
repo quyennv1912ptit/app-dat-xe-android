@@ -238,35 +238,21 @@ fun LoginScreen(onNavigateToOtp: (String, String) -> Unit
                         "Facebook User ID = ${result.accessToken.userId}"
                     )
 
-                    val facebookCredential =
-                        FacebookAuthProvider.getCredential(
-                            result.accessToken.token
-                        )
+                    val facebookCredential = FacebookAuthProvider.getCredential(result.accessToken.token)
                     val facebookToken = result.accessToken
 
-                    val facebookPhotoUrl =
-                        "https://graph.facebook.com/${facebookToken.userId}/picture?type=large"
+                    OtpData.providerPhotoUrl = "https://graph.facebook.com/${facebookToken.userId}/picture?type=large"
 
-                    OtpData.providerPhotoUrl = facebookPhotoUrl
+                    val request = GraphRequest.newMeRequest(facebookToken) { obj, response ->
+                        try {
+                            val pictureUrl = obj?.getJSONObject("picture")?.getJSONObject("data")?.getString("url")
 
-                    Log.d(
-                        "FACEBOOK_LOGIN",
-                        "Facebook avatar = $facebookPhotoUrl"
-                    )
-
-                    val request = GraphRequest.newMeRequest(
-                        facebookToken
-                    ) { obj, response ->
-
-                        Log.d(
-                            "FACEBOOK_LOGIN",
-                            "Facebook profile = $obj"
-                        )
-
-                        Log.d(
-                            "FACEBOOK_LOGIN",
-                            "Facebook email = ${obj?.optString("email")}"
-                        )
+                            if (pictureUrl != null) {
+                                OtpData.providerPhotoUrl = pictureUrl
+                            }
+                        } catch (e: Exception) {
+                            Log.e("FACEBOOK_LOGIN", "Lỗi đọc JSON ảnh Facebook", e)
+                        }
                     }
 
                     val parameters = Bundle()

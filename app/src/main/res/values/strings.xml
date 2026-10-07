@@ -1,7 +1,7 @@
 <resources>
     <string name="app_name">app-dat-xe</string>
-    <string name="facebook_app_id">1551753703298783</string>
-    <string name="facebook_client_token">f9165d6e4862d7c4c4082d81ba9e1bf8</string>
-    <string name="fb_login_protocol_scheme">fb1551753703298783</string>
-    <string name="default_web_client_id">1044172928343-h719s1i5lp0ee050rfd6t72alisiqrsu.apps.googleusercontent.com</string>
+    <string name="facebook_app_id">1127438829808752</string>
+    <string name="fb_login_protocol_scheme">fb1127438829808752</string>
+    <string name="facebook_client_token">a659269eacb51d5a26ba44420597c9e8</string>
+    <string name="default_web_client_id">833652173765-6vni5a030nf9mhtj4egrvq5vnkhanss4.apps.googleusercontent.com</string>
 </resources>

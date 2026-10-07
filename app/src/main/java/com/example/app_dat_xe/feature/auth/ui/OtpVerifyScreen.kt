@@ -122,7 +122,16 @@ fun OtpVerifyScreen(phoneNumber: String,
             "Chuẩn bị signInWithCredential"
         )
 
-        val authTask = auth.signInWithCredential(credential)
+        val authTask = if (provider == "Facebook" || provider == "Google") {
+            val currentUser = auth.currentUser
+            if (currentUser != null) {
+                currentUser.linkWithCredential(credential)
+            } else {
+                auth.signInWithCredential(credential)
+            }
+        } else {
+            auth.signInWithCredential(credential)
+        }
 
         authTask
             .addOnSuccessListener { result ->

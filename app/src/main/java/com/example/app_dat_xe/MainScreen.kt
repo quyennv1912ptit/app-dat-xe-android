@@ -1,6 +1,8 @@
 package com.example.app_dat_xe
 
 import android.content.Context
+import android.graphics.Matrix
+import android.media.ExifInterface
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
@@ -113,16 +115,29 @@ private fun compressImageForUpload(
 ): ByteArray {
     val resolver = context.contentResolver
 
-    // Bước 1: chỉ đọc kích thước
     val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
     resolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
-        ?: throw Exception("Không đọc được ảnh đã chọn")
+    if (bounds.outWidth <= 0 || bounds.outHeight <= 0) throw Exception("Tệp không hợp lệ")
 
-    if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
-        throw Exception("Tệp đã chọn không phải ảnh hợp lệ")
+    var rotationDegrees = 0f
+    try {
+        resolver.openInputStream(uri)?.use { inputStream ->
+            val exif = ExifInterface(inputStream)
+            val orientation = exif.getAttributeInt(
+                ExifInterface.TAG_ORIENTATION,
+                ExifInterface.ORIENTATION_NORMAL
+            )
+            rotationDegrees = when (orientation) {
+                ExifInterface.ORIENTATION_ROTATE_90 -> 90f
+                ExifInterface.ORIENTATION_ROTATE_180 -> 180f
+                ExifInterface.ORIENTATION_ROTATE_270 -> 270f
+                else -> 0f
+            }
+        }
+    } catch (e: Exception) {
+        Log.e("EXIF_ERROR", "Không đọc được góc xoay", e)
     }
 
-    // Bước 2: decode với inSampleSize để tiết kiệm RAM
     var sample = 1
     while (bounds.outWidth / sample > maxSide * 2 || bounds.outHeight / sample > maxSide * 2) {
         sample *= 2
@@ -130,23 +145,31 @@ private fun compressImageForUpload(
     val decodeOptions = BitmapFactory.Options().apply { inSampleSize = sample }
     val decoded = resolver.openInputStream(uri)?.use {
         BitmapFactory.decodeStream(it, null, decodeOptions)
-    } ?: throw Exception("Không đọc được ảnh đã chọn")
+    } ?: throw Exception("Không đọc được nội dung ảnh")
 
-    // Bước 3: scale xuống đúng kích thước tối đa
     val scale = minOf(1f, maxSide.toFloat() / maxOf(decoded.width, decoded.height))
-    val bitmap = if (scale < 1f) {
-        Bitmap.createScaledBitmap(
+    var bitmap = if (scale < 1f) {
+        val scaled = Bitmap.createScaledBitmap(
             decoded,
             (decoded.width * scale).toInt().coerceAtLeast(1),
             (decoded.height * scale).toInt().coerceAtLeast(1),
             true
         )
+        if (scaled !== decoded) decoded.recycle()
+        scaled
     } else {
         decoded
     }
-    if (bitmap !== decoded) decoded.recycle()
 
-    // Bước 4: nén JPEG
+    if (rotationDegrees != 0f) {
+        val matrix = Matrix().apply { postRotate(rotationDegrees) }
+        val rotatedBitmap = Bitmap.createBitmap(
+            bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true
+        )
+        if (rotatedBitmap !== bitmap) bitmap.recycle()
+        bitmap = rotatedBitmap
+    }
+
     return ByteArrayOutputStream().use { out ->
         bitmap.compress(Bitmap.CompressFormat.JPEG, quality, out)
         bitmap.recycle()

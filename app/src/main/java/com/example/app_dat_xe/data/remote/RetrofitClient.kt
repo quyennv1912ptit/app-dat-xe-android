@@ -1,23 +1,24 @@
 package com.example.app_dat_xe.data.remote
 
 import android.util.Log
+import okhttp3.Interceptor
 import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Retrofit
-import retrofit2.converter.gson.GsonConverterFactory
 import java.util.concurrent.TimeUnit
-import java.net.Proxy
-import java.net.InetSocketAddress
-import java.net.ProxySelector
 
 object RetrofitClient {
 
-    private const val BASE_URL = "http://10.0.2.2:8080/"
+    private const val BASE_URL = "http://192.168.1.101:8080/"
+
     val logging = HttpLoggingInterceptor().apply {
         level = HttpLoggingInterceptor.Level.BODY
     }
+
     val okHttpClient = OkHttpClient.Builder()
-        .addInterceptor { chain ->
+        .addInterceptor(AuthInterceptor())
+
+        .addInterceptor { chain: Interceptor.Chain ->
             val request = chain.request()
 
             Log.d(
@@ -53,9 +54,8 @@ object RetrofitClient {
         Retrofit.Builder()
             .baseUrl(BASE_URL)
             .client(okHttpClient)
-            .addConverterFactory(GsonConverterFactory.create())
+            .addConverterFactory(ApiEnvelopeConverterFactory())
             .build()
             .create(ApiService::class.java)
     }
-
 }

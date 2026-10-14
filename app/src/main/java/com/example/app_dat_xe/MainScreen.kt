@@ -842,15 +842,42 @@ fun MainScreen(
     LaunchedEffect(userId, role) {
         if (userId == null || role.isNullOrBlank()) return@LaunchedEffect
         try {
-            val ridesResponse = RetrofitClient.api.listMyRides(page = 0, size = 100)
-            if (!ridesResponse.isSuccessful) return@LaunchedEffect
-            val summary = ridesResponse.body()?.content.orEmpty()
-                .firstOrNull { it.status in activeRideStatuses } ?: return@LaunchedEffect
-            val detailResponse = RetrofitClient.api.getRideDetail(summary.id)
-            if (!detailResponse.isSuccessful) return@LaunchedEffect
-            val detail = detailResponse.body() ?: return@LaunchedEffect
-            if (detail.status !in activeRideStatuses) return@LaunchedEffect
-            if (role == "DRIVER" && detail.driverId != userId) return@LaunchedEffect
+            val summaries = mutableListOf<com.example.app_dat_xe.data.remote.RideSummaryData>()
+            var page = 0
+            while (true) {
+                val ridesResponse = RetrofitClient.api.listMyRides(page = page, size = 100)
+                if (!ridesResponse.isSuccessful) return@LaunchedEffect
+                val ridePage = ridesResponse.body() ?: return@LaunchedEffect
+                summaries += ridePage.content
+                if (!ridePage.hasNext || ridePage.content.isEmpty() || page >= 100) break
+                page += 1
+            }
+
+            val activeDetails = mutableListOf<RideDetailData>()
+            for (summary in summaries.distinctBy { it.id }.filter { it.status in activeRideStatuses }) {
+                val response = RetrofitClient.api.getRideDetail(summary.id)
+                if (!response.isSuccessful) continue
+                val detail = response.body() ?: continue
+                val belongsToAccount = when (role) {
+                    "CUSTOMER" -> detail.customerId == userId
+                    "DRIVER" -> detail.driverId == userId
+                    else -> false
+                }
+                if (detail.id == summary.id && detail.status in activeRideStatuses && belongsToAccount) {
+                    activeDetails += detail
+                }
+            }
+
+            if (activeDetails.isEmpty()) return@LaunchedEffect
+            if (activeDetails.size > 1) {
+                rideOutcomeDialog = RideOutcomeDialog(
+                    title = "Có nhiều chuyến đang hoạt động",
+                    message = "Ứng dụng chưa thể tự chọn chuyến để khôi phục. Hãy kiểm tra mục Hoạt động trước khi tiếp tục.",
+                    canRetry = false
+                )
+                return@LaunchedEffect
+            }
+            val detail = activeDetails.single()
 
             selectedRideId = detail.id
             rideStatus = detail.status
@@ -920,6 +947,8 @@ fun MainScreen(
                         "RIDE_OFFER" -> {
                             val incoming = com.google.gson.Gson().fromJson(payload, RideOfferPayload::class.java)
                                 .copy(serverTimeOffsetMs = (root.get("serverTime")?.takeUnless { it.isJsonNull }?.asLong ?: System.currentTimeMillis()) - System.currentTimeMillis())
+                            if (incoming.rideId == selectedRideId || incoming.rideId == handledOfferId) return@collect
+                            if (incoming.rideId == currentOffer?.rideId) return@collect
                             currentOffer = incoming
                             handledOfferId = null
                             offerError = null
@@ -1013,6 +1042,9 @@ fun MainScreen(
                         isBusy = isAvailabilityBusy || isDriverApprovalLoading,
                         approvalStatus = driverApprovalStatus,
                         onOpenOnboarding = { bottomNavController.navigate("driver/onboarding") },
+                        onOpenActivity = { bottomNavController.navigate(BottomNavItem.Activity.route) },
+                        onOpenWallet = { bottomNavController.navigate(BottomNavItem.Wallet.route) },
+                        onOpenAccount = { bottomNavController.navigate(BottomNavItem.Account.route) },
                         onOnlineChange = { online ->
                             if (!online) {
                                 updateDriverAvailability(false)
@@ -1026,8 +1058,10 @@ fun MainScreen(
                     )
                 } else {
                     CustomerHomeScreen(
+                        pickup = pickupPlace,
                         onSelectLocation = { bottomNavController.navigate("customer/select-location") },
-                        onNotifications = { bottomNavController.navigate(BottomNavItem.Message.route) }
+                        onNotifications = { bottomNavController.navigate(BottomNavItem.Message.route) },
+                        onPickupLocationUpdated = { pickupPlace = it }
                     )
                 }
             }
@@ -1049,6 +1083,7 @@ fun MainScreen(
             composable("customer/select-location") {
                 SelectLocationScreen(
                     onBack = { bottomNavController.popBackStack() },
+                    initialPickup = pickupPlace,
                     onConfirm = { pickup, destination ->
                         pickupPlace = pickup
                         destinationPlace = destination
@@ -1155,6 +1190,7 @@ fun MainScreen(
             ) { entry ->
                 val routeRideId = entry.arguments?.getLong("rideId") ?: selectedRideId ?: return@composable
                 TripTrackingScreen(
+                    rideId = routeRideId,
                     pickup = pickupPlace,
                     destination = destinationPlace,
                     status = rideStatus,
@@ -1170,6 +1206,7 @@ fun MainScreen(
 
             composable("customer/rating") {
                 RatingScreen(fare = finalFare, onDone = {
+                    showRideMessage("Đánh giá chưa được gửi vì máy chủ chưa có API lưu phản hồi.")
                     bottomNavController.popBackStack("home", inclusive = false)
                 })
             }

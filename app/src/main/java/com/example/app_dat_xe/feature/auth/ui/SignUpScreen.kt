@@ -27,10 +27,10 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import com.example.app_dat_xe.data.remote.LoginResponse
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -44,12 +44,24 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import android.widget.Toast
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.ui.layout.ContentScale
+import coil.compose.AsyncImage
 import androidx.compose.ui.platform.LocalContext
 import com.example.app_dat_xe.data.remote.RegisterRequest
+import com.example.app_dat_xe.data.remote.ImageUploadCompressor
 import com.google.firebase.auth.FirebaseAuth
 import com.example.app_dat_xe.data.remote.RetrofitClient
 import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.tasks.await
+import kotlinx.coroutines.withContext
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
+import okhttp3.MultipartBody
+import okhttp3.RequestBody.Companion.toRequestBody
 
 @Composable
 fun SignUpScreen(role: String, onSignUpSuccess: (LoginResponse) -> Unit) {
@@ -59,9 +71,14 @@ fun SignUpScreen(role: String, onSignUpSuccess: (LoginResponse) -> Unit) {
     var email by remember { mutableStateOf("") }
     var isAgreed by remember { mutableStateOf(false) }
     var showTermsDialog by remember { mutableStateOf(false) }
+    var avatarUri by remember { mutableStateOf<Uri?>(null) }
+    var isSubmitting by remember { mutableStateOf(false) }
     val context = LocalContext.current
     val auth = FirebaseAuth.getInstance()
     val scope = rememberCoroutineScope()
+    val photoPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri != null) avatarUri = uri
+    }
 
     if (showTermsDialog) {
         AlertDialog(
@@ -106,16 +123,26 @@ fun SignUpScreen(role: String, onSignUpSuccess: (LoginResponse) -> Unit) {
                 .size(100.dp)
                 .clip(CircleShape)
                 .background(Color.LightGray)
-                .clickable { /* TODO: Mở thư viện ảnh */ },
+                .clickable { photoPicker.launch("image/*") },
             contentAlignment = Alignment.Center
         ) {
-            Icon(
-                imageVector = Icons.Default.Person,
-                contentDescription = "Ảnh đại diện",
-                modifier = Modifier.size(50.dp),
-                tint = Color.White
-            )
+            if (avatarUri != null) {
+                AsyncImage(
+                    model = avatarUri,
+                    contentDescription = "Ảnh đại diện đã chọn",
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop
+                )
+            } else {
+                Icon(
+                    imageVector = Icons.Default.Person,
+                    contentDescription = "Chọn ảnh đại diện",
+                    modifier = Modifier.size(50.dp),
+                    tint = Color.White
+                )
+            }
         }
+        Text("Chạm để chọn ảnh đại diện", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
 
         Spacer(modifier = Modifier.height(32.dp))
 
@@ -177,6 +204,7 @@ fun SignUpScreen(role: String, onSignUpSuccess: (LoginResponse) -> Unit) {
 
         Button(
             onClick = {
+                if (isSubmitting) return@Button
 
                 val idToken = OtpData.phoneIdToken
                 val phoneNumber = OtpData.phoneNumber
@@ -200,6 +228,7 @@ fun SignUpScreen(role: String, onSignUpSuccess: (LoginResponse) -> Unit) {
                 )
 
                 scope.launch {
+                    isSubmitting = true
                     try {
                         val response = RetrofitClient.api.register(request)
 
@@ -208,10 +237,42 @@ fun SignUpScreen(role: String, onSignUpSuccess: (LoginResponse) -> Unit) {
                             val result = response.body()
 
                             if (result != null) {
+                                val selectedAvatar = avatarUri
+                                var avatarUploadFailed = false
+                                if (selectedAvatar != null) {
+                                    try {
+                                        val mimeType = context.contentResolver.getType(selectedAvatar)
+                                        require(mimeType == null || mimeType.startsWith("image/")) {
+                                            "Vui lòng chọn một tệp ảnh"
+                                        }
+                                        val firebaseUser = auth.currentUser
+                                            ?: throw IllegalStateException("Không lấy được phiên đăng nhập để tải ảnh")
+                                        val freshToken = firebaseUser.getIdToken(false).await().token
+                                            ?: throw IllegalStateException("Không lấy được thông tin xác thực")
+                                        val imageBytes = withContext(Dispatchers.IO) {
+                                            ImageUploadCompressor.compress(context, selectedAvatar)
+                                        }
+                                        val imagePart = MultipartBody.Part.createFormData(
+                                            name = "file",
+                                            filename = "avatar.jpg",
+                                            body = imageBytes.toRequestBody("image/jpeg".toMediaTypeOrNull())
+                                        )
+                                        val uploadResponse = RetrofitClient.api.uploadAvatar(
+                                            token = "Bearer $freshToken",
+                                            role = role,
+                                            file = imagePart
+                                        )
+                                        avatarUploadFailed = !uploadResponse.isSuccessful
+                                    } catch (_: Exception) {
+                                        avatarUploadFailed = true
+                                    }
+                                }
+
                                 Toast.makeText(
                                     context,
-                                    "Đăng ký thành công",
-                                    Toast.LENGTH_SHORT
+                                    if (avatarUploadFailed) "Đăng ký thành công, nhưng chưa tải được ảnh đại diện. Bạn có thể thử lại trong hồ sơ."
+                                    else "Đăng ký thành công",
+                                    Toast.LENGTH_LONG
                                 ).show()
 
                                 OtpData.phoneIdToken = null
@@ -239,15 +300,17 @@ fun SignUpScreen(role: String, onSignUpSuccess: (LoginResponse) -> Unit) {
                             "Lỗi kết nối: ${e.message}",
                             Toast.LENGTH_LONG
                         ).show()
+                    } finally {
+                        isSubmitting = false
                     }
                 }
             },
             modifier = Modifier
                 .fillMaxWidth()
                 .height(50.dp),
-            enabled = fullName.isNotBlank() && isAgreed
+            enabled = fullName.isNotBlank() && isAgreed && !isSubmitting
         ) {
-            Text("Bắt đầu sử dụng", style = MaterialTheme.typography.titleMedium)
+            Text(if (isSubmitting) "ĐANG TẠO TÀI KHOẢN…" else "Bắt đầu sử dụng", style = MaterialTheme.typography.titleMedium)
         }
     }
 }

@@ -13,7 +13,15 @@ object DeviceTokenRegistrar {
     private const val PENDING_TOKEN = "pending_fcm_token"
 
     suspend fun registerCurrentToken(context: Context) {
-        val token = FirebaseMessaging.getInstance().token.await()
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val token = try {
+            FirebaseMessaging.getInstance().token.await()
+        } catch (exception: Exception) {
+            val pendingToken = prefs.getString(PENDING_TOKEN, null)
+                ?: throw exception
+            Log.w("PUSH_REGISTRATION", "Dùng token FCM đang chờ vì chưa lấy được token mới", exception)
+            pendingToken
+        }
         registerToken(context, token)
     }
 

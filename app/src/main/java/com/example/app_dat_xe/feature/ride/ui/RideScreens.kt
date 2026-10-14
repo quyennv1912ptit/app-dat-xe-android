@@ -1,8 +1,10 @@
 package com.example.app_dat_xe.feature.ride.ui
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.widget.Toast
 import java.io.File
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -11,9 +13,7 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -29,7 +29,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -37,12 +36,10 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.DirectionsBike
+import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.AccountBalanceWallet
-import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.CreditCard
-import androidx.compose.material.icons.filled.DirectionsCar
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.MyLocation
@@ -57,6 +54,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -91,10 +89,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -108,6 +103,7 @@ import com.example.app_dat_xe.data.location.DeviceLocationProvider
 import com.example.app_dat_xe.data.remote.EstimateRideResponse
 import com.example.app_dat_xe.data.remote.RetrofitClient
 import com.example.app_dat_xe.data.remote.RideOfferPayload
+import com.example.app_dat_xe.data.remote.RideSummaryData
 import com.example.app_dat_xe.feature.ride.formatVnd
 import com.google.gson.JsonParser
 import kotlinx.coroutines.delay
@@ -119,8 +115,26 @@ private val RideAmber = Color(0xFFFFB547)
 
 data class RidePlace(val address: String, val latitude: Double? = null, val longitude: Double? = null)
 private data class PlaceSuggestion(val name: String, val address: String, val latitude: Double, val longitude: Double)
-private data class RideNotification(val id: Int, val title: String, val body: String, val time: String)
-private data class WalletTransaction(val title: String, val amount: String, val time: String)
+private fun openDialer(context: android.content.Context, phoneNumber: String?) {
+    if (phoneNumber.isNullOrBlank()) {
+        Toast.makeText(context, "Chưa có số điện thoại liên hệ.", Toast.LENGTH_SHORT).show()
+        return
+    }
+    try {
+        context.startActivity(Intent(Intent.ACTION_DIAL, Uri.fromParts("tel", phoneNumber, null)))
+    } catch (_: Exception) {
+        Toast.makeText(context, "Không mở được ứng dụng gọi điện.", Toast.LENGTH_SHORT).show()
+    }
+}
+private fun openMapAt(context: android.content.Context, latitude: Double, longitude: Double) {
+    try {
+        val intent = Intent(Intent.ACTION_VIEW, Uri.parse("geo:$latitude,$longitude?z=16"))
+        if (intent.resolveActivity(context.packageManager) != null) context.startActivity(intent)
+        else Toast.makeText(context, "Thiết bị chưa có ứng dụng bản đồ.", Toast.LENGTH_SHORT).show()
+    } catch (_: Exception) {
+        Toast.makeText(context, "Không mở được ứng dụng bản đồ.", Toast.LENGTH_SHORT).show()
+    }
+}
 
 private fun statusLabel(status: String): String = when (status) {
     "PENDING" -> "Đã đặt lịch · chờ đến giờ tìm tài xế"
@@ -149,11 +163,37 @@ private val placeSuggestions = listOf(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CustomerHomeScreen(
+    pickup: RidePlace,
     onSelectLocation: () -> Unit,
-    onNotifications: () -> Unit
+    onNotifications: () -> Unit,
+    onPickupLocationUpdated: (RidePlace) -> Unit
 ) {
+    val context = LocalContext.current
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val coroutineScope = androidx.compose.runtime.rememberCoroutineScope()
+    fun refreshLocation() {
+        val hasPermission = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
+            ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        if (!hasPermission) {
+            Toast.makeText(context, "Hãy cấp quyền vị trí để cập nhật điểm đón.", Toast.LENGTH_SHORT).show()
+            return
+        }
+        coroutineScope.launch {
+            val location = DeviceLocationProvider.currentLocation(context)
+            if (location == null) {
+                Toast.makeText(context, "Không lấy được vị trí GPS. Hãy bật định vị rồi thử lại.", Toast.LENGTH_SHORT).show()
+            } else {
+                onPickupLocationUpdated(RidePlace("Vị trí hiện tại", location.latitude, location.longitude))
+                openMapAt(context, location.latitude, location.longitude)
+            }
+        }
+    }
+    val locationPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        if (permissions.values.any { it }) refreshLocation()
+        else Toast.makeText(context, "Cần quyền vị trí để cập nhật điểm đón.", Toast.LENGTH_SHORT).show()
+    }
     ModalNavigationDrawer(
         drawerState = drawerState,
         drawerContent = {
@@ -175,7 +215,7 @@ fun CustomerHomeScreen(
         }
     ) {
       Box(Modifier.fillMaxSize().statusBarsPadding()) {
-        MapIllustration(showRoute = false)
+        MapUnavailablePlaceholder()
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 14.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -188,7 +228,11 @@ fun CustomerHomeScreen(
             }
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Text("VỊ TRÍ CỦA BẠN", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text("Quận 1, TP. Hồ Chí Minh", fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
+                Text(
+                    pickup.latitude?.let { lat -> pickup.longitude?.let { lng -> "%.5f, %.5f".format(lat, lng) } } ?: pickup.address,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
             }
             Surface(shape = CircleShape, shadowElevation = 6.dp, color = MaterialTheme.colorScheme.surface) {
                 IconButton(onClick = onNotifications) {
@@ -196,9 +240,6 @@ fun CustomerHomeScreen(
                 }
             }
         }
-        MapMarker(Modifier.align(Alignment.Center).padding(bottom = 46.dp), label = "Bạn đang ở đây")
-        MapMarker(Modifier.align(Alignment.Center).padding(top = 150.dp, end = 155.dp), driver = true)
-        MapMarker(Modifier.align(Alignment.Center).padding(top = 85.dp, start = 175.dp), driver = true)
         Column(
             Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
@@ -209,7 +250,12 @@ fun CustomerHomeScreen(
                 shadowElevation = 4.dp,
                 color = MaterialTheme.colorScheme.surface
             ) {
-                IconButton(onClick = {}) {
+                IconButton(onClick = {
+                    val hasPermission = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
+                        ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+                    if (hasPermission) refreshLocation()
+                    else locationPermissionLauncher.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION))
+                }) {
                     Icon(Icons.Default.MyLocation, contentDescription = "Định vị lại", tint = RideGreen)
                 }
             }
@@ -230,11 +276,6 @@ fun CustomerHomeScreen(
                         Text("Bạn muốn đi đâu?", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
                         Text("›", fontSize = 28.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        QuickDestination("🏠", "Về nhà")
-                        QuickDestination("💼", "Đi làm")
-                        QuickDestination("＋", "Thêm địa điểm")
-                    }
                 }
             }
         }
@@ -243,61 +284,16 @@ fun CustomerHomeScreen(
 }
 
 @Composable
-private fun MapIllustration(showRoute: Boolean, modifier: Modifier = Modifier) {
-    Box(modifier.fillMaxSize().background(Color(0xFFEAF0E8))) {
-        Canvas(Modifier.fillMaxSize()) {
-            val w = size.width
-            val h = size.height
-            val road = Color(0xFFFCFDFC)
-            val roadEdge = Color(0xFFDCE5DD)
-            listOf(.12f, .31f, .52f, .74f, .91f).forEach { y ->
-                drawLine(roadEdge, androidx.compose.ui.geometry.Offset(0f, h * y), androidx.compose.ui.geometry.Offset(w, h * y), 30.dp.toPx())
-                drawLine(road, androidx.compose.ui.geometry.Offset(0f, h * y), androidx.compose.ui.geometry.Offset(w, h * y), 24.dp.toPx())
-            }
-            listOf(.08f, .29f, .55f, .79f, .96f).forEach { x ->
-                drawLine(roadEdge, androidx.compose.ui.geometry.Offset(w * x, 0f), androidx.compose.ui.geometry.Offset(w * x, h), 26.dp.toPx())
-                drawLine(road, androidx.compose.ui.geometry.Offset(w * x, 0f), androidx.compose.ui.geometry.Offset(w * x, h), 20.dp.toPx())
-            }
-            if (showRoute) {
-                val route = Path().apply {
-                    moveTo(w * .2f, h * .78f)
-                    cubicTo(w * .25f, h * .6f, w * .58f, h * .64f, w * .55f, h * .46f)
-                    cubicTo(w * .52f, h * .3f, w * .73f, h * .3f, w * .8f, h * .14f)
-                }
-                drawPath(route, RideGreen, style = Stroke(8.dp.toPx(), cap = StrokeCap.Round))
-            }
-        }
-        Text("ĐƯỜNG LÊ LỢI", Modifier.align(Alignment.TopCenter).padding(top = 95.dp), color = Color(0xFF829188), fontSize = 10.sp, letterSpacing = 1.sp)
-        Text("ĐƯỜNG NGUYỄN HUỆ", Modifier.align(Alignment.CenterStart).padding(start = 8.dp), color = Color(0xFF829188), fontSize = 9.sp)
-        Text("CÔNG VIÊN", Modifier.align(Alignment.TopEnd).padding(top = 145.dp, end = 20.dp), color = Color(0xFF6A9B78), fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
-    }
-}
-
-@Composable
-private fun MapMarker(modifier: Modifier = Modifier, label: String? = null, driver: Boolean = false) {
-    Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
-        if (label != null) {
-            Surface(shape = RoundedCornerShape(20.dp), shadowElevation = 3.dp, color = MaterialTheme.colorScheme.surface) {
-                Text(label, Modifier.padding(horizontal = 12.dp, vertical = 7.dp), color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
-            }
-            Spacer(Modifier.height(7.dp))
-        }
-        Box(
-            Modifier.size(if (driver) 42.dp else 48.dp).clip(CircleShape).background(if (driver) MaterialTheme.colorScheme.surface else RideGreen).border(3.dp, Color.White, CircleShape),
-            contentAlignment = Alignment.Center
+private fun MapUnavailablePlaceholder(modifier: Modifier = Modifier) {
+    Box(modifier.fillMaxSize().background(MaterialTheme.colorScheme.surfaceVariant), contentAlignment = Alignment.Center) {
+        Column(
+            Modifier.padding(24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Icon(if (driver) Icons.AutoMirrored.Filled.DirectionsBike else Icons.Default.LocationOn, contentDescription = null, tint = if (driver) RideGreen else Color.White, modifier = Modifier.size(25.dp))
-        }
-    }
-}
-
-@Composable
-private fun QuickDestination(emoji: String, label: String) {
-    Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(20.dp)) {
-        Row(Modifier.padding(horizontal = 11.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(emoji, fontSize = 14.sp)
-            Spacer(Modifier.width(6.dp))
-            Text(label, color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.labelSmall)
+            Icon(Icons.Default.MyLocation, contentDescription = null, tint = RideGreen, modifier = Modifier.size(32.dp))
+            Text("Bản đồ trực tiếp chưa được cấu hình", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
+            Text("Vị trí GPS vẫn có thể dùng để chọn điểm đón.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
@@ -305,10 +301,13 @@ private fun QuickDestination(emoji: String, label: String) {
 @Composable
 fun SelectLocationScreen(
     onBack: () -> Unit,
-    onConfirm: (pickup: RidePlace, destination: RidePlace) -> Unit
+    onConfirm: (pickup: RidePlace, destination: RidePlace) -> Unit,
+    initialPickup: RidePlace? = null
 ) {
     val context = LocalContext.current
-    var pickup by remember { mutableStateOf(RidePlace("Đang xác định vị trí…")) }
+    var pickup by remember(initialPickup) {
+        mutableStateOf(initialPickup?.takeIf { it.latitude != null && it.longitude != null } ?: RidePlace("Đang xác định vị trí…"))
+    }
     var destination by remember { mutableStateOf("") }
     var selectedDestination by remember { mutableStateOf<RidePlace?>(null) }
     var query by remember { mutableStateOf("") }
@@ -343,6 +342,7 @@ fun SelectLocationScreen(
     LaunchedEffect(Unit) {
         delay(250)
         destinationFocusRequester.requestFocus()
+        if (pickup.latitude != null && pickup.longitude != null) return@LaunchedEffect
         if (!hasLocationPermission) {
             locationPermissionLauncher.launch(
                 arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)
@@ -439,8 +439,7 @@ fun SelectLocationScreen(
                 }
                 item {
                     Box(Modifier.fillMaxWidth().height(130.dp).padding(horizontal = 16.dp, vertical = 8.dp).clip(RoundedCornerShape(18.dp))) {
-                        MapIllustration(showRoute = false)
-                        MapMarker(Modifier.align(Alignment.Center), label = "Điểm đã chọn")
+                        MapUnavailablePlaceholder()
                     }
                 }
             }
@@ -474,7 +473,6 @@ fun TripOptionsScreen(
     onEstimate: (Long) -> Unit,
     onBook: (vehicleId: Long, paymentMethod: String) -> Unit
 ) {
-    var payment by remember { mutableStateOf("Tiền mặt") }
     var promo by remember { mutableStateOf("") }
     var selectedVehicleId by remember(initialVehicleId) { mutableStateOf(initialVehicleId?.takeIf { it > 0 }) }
     var showVehiclePicker by remember { mutableStateOf(false) }
@@ -483,7 +481,7 @@ fun TripOptionsScreen(
     val currentEstimate = estimate?.takeIf { estimatedVehicleId == vehicleId }
     Scaffold(topBar = { RideTopBar("Chọn dịch vụ", onBack) }, containerColor = MaterialTheme.colorScheme.surfaceVariant) { padding ->
         Box(Modifier.fillMaxSize().padding(padding)) {
-            MapIllustration(showRoute = true)
+            MapUnavailablePlaceholder()
             Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().clip(RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)).background(MaterialTheme.colorScheme.surface).padding(bottom = 12.dp)) {
                 Column(Modifier.padding(horizontal = 18.dp, vertical = 15.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
                     Text("Lộ trình của bạn", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
@@ -513,14 +511,18 @@ fun TripOptionsScreen(
                     shape = RoundedCornerShape(14.dp)
                 ) { Text(if (isEstimating) "Đang tính giá…" else "Tính giá chuyến đi") }
                 estimateError?.let { Text(it, Modifier.padding(horizontal = 20.dp), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
-                Row(Modifier.fillMaxWidth().padding(horizontal = 18.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    listOf("Tiền mặt", "Ví").forEach { option ->
-                        FilterPill(option, payment == option, Modifier.weight(1f)) { payment = option }
+                Row(Modifier.fillMaxWidth().padding(horizontal = 18.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Surface(Modifier.weight(1f), shape = RoundedCornerShape(14.dp), color = MaterialTheme.colorScheme.surfaceVariant) {
+                        Row(Modifier.padding(horizontal = 12.dp, vertical = 15.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.Payments, contentDescription = null, tint = RideGreen)
+                            Spacer(Modifier.width(8.dp))
+                            Text("Thanh toán tiền mặt", color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.labelMedium)
+                        }
                     }
                     OutlinedTextField(value = promo, onValueChange = { promo = it }, modifier = Modifier.weight(1.2f).height(54.dp), placeholder = { Text("Mã ưu đãi", fontSize = 12.sp) }, singleLine = true, shape = RoundedCornerShape(14.dp), enabled = false)
                 }
                 bookingError?.let { Text(it, Modifier.padding(horizontal = 20.dp), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
-                Button(onClick = { vehicleId?.let { onBook(it, if (payment == "Tiền mặt") "CASH" else "WALLET") } }, enabled = vehicleId != null && vehicleId > 0 && currentEstimate != null, modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 13.dp).height(54.dp), shape = RoundedCornerShape(16.dp), colors = ButtonDefaults.buttonColors(containerColor = RideGreen)) {
+                Button(onClick = { vehicleId?.let { onBook(it, "CASH") } }, enabled = vehicleId != null && vehicleId > 0 && currentEstimate != null, modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 13.dp).height(54.dp), shape = RoundedCornerShape(16.dp), colors = ButtonDefaults.buttonColors(containerColor = RideGreen)) {
                     Text("Đặt xe ngay · ${formatVnd(currentEstimate?.estimatedFare)}đ", fontWeight = FontWeight.Bold)
                 }
             }
@@ -593,6 +595,7 @@ fun FindingDriverScreen(
 
 @Composable
 fun TripTrackingScreen(
+    rideId: Long,
     pickup: RidePlace,
     destination: RidePlace,
     status: String,
@@ -604,9 +607,9 @@ fun TripTrackingScreen(
     onCancel: () -> Unit,
     onBack: () -> Unit
 ) {
+    val context = LocalContext.current
     Box(Modifier.fillMaxSize()) {
-        MapIllustration(showRoute = true)
-        MapMarker(Modifier.align(Alignment.Center).padding(bottom = 35.dp), driver = true)
+        MapUnavailablePlaceholder()
         Surface(Modifier.align(Alignment.TopStart).padding(15.dp), shape = CircleShape, color = MaterialTheme.colorScheme.surface, shadowElevation = 4.dp) {
             IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Quay lại") }
         }
@@ -624,8 +627,17 @@ fun TripTrackingScreen(
                     Text(driverName ?: "Đang tải thông tin tài xế", fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
                     Text("${driverPhone ?: "Số điện thoại chưa có"} · ★ ${driverRating?.let { "%.1f".format(it) } ?: "–"}", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
                 }
-                IconButton(onClick = {}) { Icon(Icons.Default.Call, contentDescription = "Gọi tài xế", tint = RideGreen) }
-                IconButton(onClick = {}) { Icon(Icons.Default.Share, contentDescription = "Chia sẻ hành trình", tint = RideGreen) }
+                IconButton(onClick = { openDialer(context, driverPhone) }) { Icon(Icons.Default.Call, contentDescription = "Gọi tài xế", tint = RideGreen) }
+                IconButton(onClick = {
+                    val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                        type = "text/plain"
+                        putExtra(
+                            Intent.EXTRA_TEXT,
+                            "Hành trình GoRide #$rideId: ${pickup.address} → ${destination.address}. Trạng thái: ${statusLabel(status)}."
+                        )
+                    }
+                    context.startActivity(Intent.createChooser(shareIntent, "Chia sẻ hành trình"))
+                }) { Icon(Icons.Default.Share, contentDescription = "Chia sẻ hành trình", tint = RideGreen) }
             }
             RouteLine(pickup.address, destination.address)
             if (status == "VEHICLE_HANDOVER") {
@@ -644,7 +656,6 @@ fun TripTrackingScreen(
 fun RatingScreen(fare: Long?, onDone: () -> Unit) {
     var rating by remember { mutableIntStateOf(0) }
     var comment by remember { mutableStateOf("") }
-    var tip by remember { mutableStateOf("Không tip") }
     Scaffold(containerColor = MaterialTheme.colorScheme.surface) { padding ->
         Column(Modifier.fillMaxSize().padding(padding).padding(horizontal = 24.dp, vertical = 22.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             Spacer(Modifier.height(22.dp))
@@ -652,6 +663,11 @@ fun RatingScreen(fare: Long?, onDone: () -> Unit) {
             Spacer(Modifier.height(18.dp))
             Text("Chuyến đi hoàn tất", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
             Text("Cảm ơn bạn đã đồng hành cùng GoRide", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(
+                "Máy chủ chưa có API lưu đánh giá; nội dung bạn nhập chưa được gửi.",
+                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodySmall
+            )
             Spacer(Modifier.height(27.dp))
             Text("${formatVnd(fare)}đ", fontSize = 38.sp, fontWeight = FontWeight.ExtraBold, color = RideGreenDark)
             Text("Thông tin thanh toán từ chuyến đi", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
@@ -665,40 +681,25 @@ fun RatingScreen(fare: Long?, onDone: () -> Unit) {
                 }
             }
             OutlinedTextField(value = comment, onValueChange = { comment = it }, modifier = Modifier.fillMaxWidth().height(118.dp), placeholder = { Text("Chia sẻ trải nghiệm của bạn…") }, shape = RoundedCornerShape(16.dp), maxLines = 4)
-            Spacer(Modifier.height(19.dp))
-            Text("Gửi thêm tiền tip", fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
-            LazyRow(Modifier.fillMaxWidth().padding(vertical = 10.dp), horizontalArrangement = Arrangement.spacedBy(9.dp), contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 2.dp)) {
-                items(listOf("Không tip", "10.000đ", "20.000đ", "50.000đ")) { amount -> FilterPill(amount, tip == amount) { tip = amount } }
-            }
             Spacer(Modifier.weight(1f))
-            Button(onClick = onDone, enabled = rating > 0, modifier = Modifier.fillMaxWidth().height(54.dp), shape = RoundedCornerShape(16.dp), colors = ButtonDefaults.buttonColors(containerColor = RideGreen)) { Text("Hoàn tất", fontWeight = FontWeight.Bold) }
+            Button(onClick = onDone, modifier = Modifier.fillMaxWidth().height(54.dp), shape = RoundedCornerShape(16.dp), colors = ButtonDefaults.buttonColors(containerColor = RideGreen)) { Text("Về trang chủ", fontWeight = FontWeight.Bold) }
         }
     }
 }
 
 @Composable
 fun NotificationScreen() {
-    var readItems by remember { mutableStateOf(setOf(1)) }
-    val notifications = listOf(
-        RideNotification(1, "Chào mừng bạn đến với GoRide", "Đặt chuyến đầu tiên và khám phá thành phố theo cách thuận tiện hơn.", "Hôm nay · 09:30"),
-        RideNotification(2, "Ưu đãi cuối tuần", "Nhập mã GORIDE20 để giảm 20% cho chuyến đi tiếp theo.", "Hôm qua · 16:10"),
-        RideNotification(3, "Chuyến đi đã hoàn tất", "Cảm ơn bạn đã sử dụng dịch vụ. Chúc bạn một ngày tốt lành!", "12 thg 10 · 18:42")
-    )
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface)) {
         Text("Thông báo", Modifier.padding(horizontal = 20.dp, vertical = 20.dp), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
-        LazyColumn(contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 18.dp)) {
-            items(notifications) { notification ->
-                val isRead = notification.id in readItems
-                Row(Modifier.fillMaxWidth().clickable { readItems = readItems + notification.id }.padding(horizontal = 18.dp, vertical = 16.dp), verticalAlignment = Alignment.Top) {
-                    Box(Modifier.size(10.dp).padding(top = 4.dp).clip(CircleShape).background(if (isRead) Color.Transparent else RideGreen))
-                    Spacer(Modifier.width(12.dp))
-                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text(notification.title, fontWeight = if (isRead) FontWeight.Medium else FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
-                        Text(notification.body, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
-                        Text(notification.time, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall)
-                    }
-                }
-                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant, modifier = Modifier.padding(start = 40.dp))
+        Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Icon(Icons.Default.Notifications, contentDescription = null, tint = RideGreen, modifier = Modifier.size(40.dp))
+                Text("Chưa có thông báo", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
+                Text(
+                    "Thông báo chuyến đi sẽ xuất hiện ở đây khi được kết nối với hộp thư của máy chủ.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodySmall
+                )
             }
         }
     }
@@ -710,18 +711,72 @@ fun DriverHomeScreen(
     isBusy: Boolean,
     approvalStatus: String,
     onOpenOnboarding: () -> Unit,
-    onOnlineChange: (Boolean) -> Unit
+    onOnlineChange: (Boolean) -> Unit,
+    onOpenActivity: () -> Unit,
+    onOpenWallet: () -> Unit,
+    onOpenAccount: () -> Unit
 ) {
+    val context = LocalContext.current
+    val drawerState = rememberDrawerState(DrawerValue.Closed)
+    val coroutineScope = androidx.compose.runtime.rememberCoroutineScope()
     val approved = approvalStatus == "APPROVED"
     val approvalLabel = when (approvalStatus) {
         "APPROVED" -> "Đã duyệt"
         "REJECTED" -> "Bị từ chối"
         else -> "Chờ duyệt"
     }
-    Box(Modifier.fillMaxSize().statusBarsPadding()) {
-        MapIllustration(showRoute = false)
+    fun openCurrentLocation() {
+        val hasPermission = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
+            ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        if (!hasPermission) {
+            Toast.makeText(context, "Hãy cấp quyền vị trí để định vị.", Toast.LENGTH_SHORT).show()
+            return
+        }
+        coroutineScope.launch {
+            val location = DeviceLocationProvider.currentLocation(context)
+            if (location == null) {
+                Toast.makeText(context, "Không lấy được GPS. Hãy bật định vị rồi thử lại.", Toast.LENGTH_SHORT).show()
+            } else {
+                openMapAt(context, location.latitude, location.longitude)
+            }
+        }
+    }
+    val locationPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        if (permissions.values.any { it }) openCurrentLocation()
+        else Toast.makeText(context, "Cần quyền vị trí để định vị.", Toast.LENGTH_SHORT).show()
+    }
+    ModalNavigationDrawer(
+        drawerState = drawerState,
+        drawerContent = {
+            ModalDrawerSheet {
+                Text("GoRide · Tài xế", Modifier.padding(horizontal = 24.dp, vertical = 26.dp), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, color = RideGreenDark)
+                NavigationDrawerItem(
+                    label = { Text("Hoạt động chuyến") },
+                    selected = false,
+                    onClick = { coroutineScope.launch { drawerState.close() }; onOpenActivity() },
+                    icon = { Icon(Icons.AutoMirrored.Filled.List, contentDescription = null) }
+                )
+                NavigationDrawerItem(
+                    label = { Text("Ví tài xế") },
+                    selected = false,
+                    onClick = { coroutineScope.launch { drawerState.close() }; onOpenWallet() },
+                    icon = { Icon(Icons.Default.AccountBalanceWallet, contentDescription = null) }
+                )
+                NavigationDrawerItem(
+                    label = { Text("Tài khoản") },
+                    selected = false,
+                    onClick = { coroutineScope.launch { drawerState.close() }; onOpenAccount() },
+                    icon = { Icon(Icons.Default.Person, contentDescription = null) }
+                )
+            }
+        }
+    ) {
+      Box(Modifier.fillMaxSize().statusBarsPadding()) {
+        MapUnavailablePlaceholder()
         Row(Modifier.fillMaxWidth().padding(17.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-            Surface(shape = CircleShape, shadowElevation = 5.dp, color = MaterialTheme.colorScheme.surface) { IconButton(onClick = {}) { Icon(Icons.Default.Menu, contentDescription = "Mở menu") } }
+            Surface(shape = CircleShape, shadowElevation = 5.dp, color = MaterialTheme.colorScheme.surface) { IconButton(onClick = { coroutineScope.launch { drawerState.open() } }) { Icon(Icons.Default.Menu, contentDescription = "Mở menu") } }
             Surface(shape = RoundedCornerShape(30.dp), color = if (isOnline) RideGreen else MaterialTheme.colorScheme.surface, shadowElevation = 4.dp) {
                 Row(Modifier.padding(start = 13.dp, end = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text(if (isOnline) "ĐANG ONLINE" else "NGOẠI TUYẾN", color = if (isOnline) Color.White else MaterialTheme.colorScheme.onSurfaceVariant, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelMedium)
@@ -729,7 +784,6 @@ fun DriverHomeScreen(
                 }
             }
         }
-        MapMarker(Modifier.align(Alignment.Center), label = if (isOnline) "Bạn đang sẵn sàng" else "Bạn đang ngoại tuyến", driver = true)
         Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Card(shape = RoundedCornerShape(22.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
                 Column(Modifier.fillMaxWidth().padding(17.dp), verticalArrangement = Arrangement.spacedBy(11.dp)) {
@@ -744,7 +798,15 @@ fun DriverHomeScreen(
                 }
             }
         }
-        Surface(Modifier.align(Alignment.CenterEnd).padding(end = 14.dp), shape = CircleShape, color = MaterialTheme.colorScheme.surface, shadowElevation = 4.dp) { IconButton(onClick = {}) { Icon(Icons.Default.MyLocation, contentDescription = "Định vị lại", tint = RideGreen) } }
+        Surface(Modifier.align(Alignment.CenterEnd).padding(end = 14.dp), shape = CircleShape, color = MaterialTheme.colorScheme.surface, shadowElevation = 4.dp) {
+            IconButton(onClick = {
+                val hasPermission = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
+                    ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+                if (hasPermission) openCurrentLocation()
+                else locationPermissionLauncher.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION))
+            }) { Icon(Icons.Default.MyLocation, contentDescription = "Định vị lại", tint = RideGreen) }
+        }
+      }
     }
 }
 
@@ -756,12 +818,22 @@ fun IncomingTripScreen(
     onReject: () -> Unit,
     onAccept: () -> Unit
 ) {
-    var seconds by remember(offer.rideId, offer.serverTimeOffsetMs) {
+    var seconds by remember(offer.rideId, offer.expiresAt, offer.serverTimeOffsetMs) {
         mutableIntStateOf(((offer.expiresAt - (System.currentTimeMillis() + offer.serverTimeOffsetMs)) / 1_000L).toInt().coerceAtLeast(0))
     }
-    LaunchedEffect(offer.rideId) {
-        while (seconds > 0) { delay(1_000); seconds-- }
-        onReject()
+    LaunchedEffect(offer.rideId, offer.expiresAt, offer.serverTimeOffsetMs, isAccepting) {
+        if (isAccepting) return@LaunchedEffect
+        while (true) {
+            val remaining = ((offer.expiresAt - (System.currentTimeMillis() + offer.serverTimeOffsetMs) + 999L) / 1_000L)
+                .toInt()
+                .coerceAtLeast(0)
+            seconds = remaining
+            if (remaining == 0) {
+                onReject()
+                break
+            }
+            delay(1_000)
+        }
     }
     Scaffold(containerColor = MaterialTheme.colorScheme.surfaceVariant) { padding ->
         Column(Modifier.fillMaxSize().padding(padding).padding(18.dp), verticalArrangement = Arrangement.spacedBy(15.dp)) {
@@ -790,9 +862,9 @@ fun IncomingTripScreen(
                 }
             }
             error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
-            Box(Modifier.weight(1f).fillMaxWidth().clip(RoundedCornerShape(20.dp))) { MapIllustration(showRoute = true); MapMarker(Modifier.align(Alignment.Center), label = "Điểm đón") }
+            Box(Modifier.weight(1f).fillMaxWidth().clip(RoundedCornerShape(20.dp))) { MapUnavailablePlaceholder() }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                OutlinedButton(onClick = onReject, modifier = Modifier.weight(1f).height(58.dp), shape = RoundedCornerShape(16.dp)) { Text("BỎ QUA", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                OutlinedButton(onClick = onReject, enabled = !isAccepting && seconds > 0, modifier = Modifier.weight(1f).height(58.dp), shape = RoundedCornerShape(16.dp)) { Text("BỎ QUA", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                 Button(onClick = onAccept, enabled = !isAccepting && seconds > 0, modifier = Modifier.weight(1f).height(58.dp), shape = RoundedCornerShape(16.dp), colors = ButtonDefaults.buttonColors(containerColor = RideGreen)) { Text(if (isAccepting) "ĐANG NHẬN…" else "NHẬN CHUYẾN", fontWeight = FontWeight.Bold) }
             }
         }
@@ -810,13 +882,22 @@ fun DriverActiveTripScreen(
     onAdvance: (Int) -> Unit,
     onBack: () -> Unit
 ) {
+    val context = LocalContext.current
     val labels = listOf("BẮT ĐẦU ĐI ĐÓN", "ĐÃ ĐẾN ĐIỂM ĐÓN", "CHỤP ẢNH XE TRƯỚC CHUYẾN", "BẮT ĐẦU HÀNH TRÌNH", "ĐÃ ĐẾN ĐIỂM TRẢ", "CHỤP ẢNH XE SAU CHUYẾN", "HOÀN THÀNH CHUYẾN ĐI")
     val statuses = listOf("Xác nhận bắt đầu đón khách", "Đến điểm đón", "Ghi nhận tình trạng xe trước chuyến", "Khách đã lên xe", "Đến điểm trả", "Ghi nhận tình trạng xe sau chuyến", "Hoàn thành chuyến #$rideId")
     Box(Modifier.fillMaxSize()) {
-        MapIllustration(showRoute = true)
+        MapUnavailablePlaceholder()
         Surface(Modifier.align(Alignment.TopStart).padding(14.dp), shape = CircleShape, color = MaterialTheme.colorScheme.surface, shadowElevation = 3.dp) { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Quay lại") } }
         Surface(Modifier.align(Alignment.TopEnd).padding(14.dp), shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surface, shadowElevation = 3.dp) {
-            Text("Mở điều hướng ↗", Modifier.clickable { }.padding(horizontal = 14.dp, vertical = 11.dp), color = RideGreen, fontWeight = FontWeight.SemiBold)
+            Text(
+                "Mở điều hướng ↗",
+                Modifier.clickable {
+                    val target = if (step <= 1) offer.pickup else offer.dropoff
+                    openMapAt(context, target.lat, target.lng)
+                }.padding(horizontal = 14.dp, vertical = 11.dp),
+                color = RideGreen,
+                fontWeight = FontWeight.SemiBold
+            )
         }
         Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().clip(RoundedCornerShape(topStart = 25.dp, topEnd = 25.dp)).background(MaterialTheme.colorScheme.surface).padding(18.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             Text(statuses[step.coerceIn(0, statuses.lastIndex)], style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
@@ -824,7 +905,7 @@ fun DriverActiveTripScreen(
                 Surface(shape = CircleShape, color = MaterialTheme.colorScheme.surfaceVariant, modifier = Modifier.size(48.dp)) { Box(contentAlignment = Alignment.Center) { Icon(Icons.Default.Person, contentDescription = null, tint = RideGreen) } }
                 Spacer(Modifier.width(10.dp))
                 Column(Modifier.weight(1f)) { Text(offer.customer.displayName, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface); Text("Khách hàng · ★ ${"%.1f".format(offer.customer.rating)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-                IconButton(onClick = {}) { Icon(Icons.Default.Call, contentDescription = "Gọi khách", tint = RideGreen) }
+                IconButton(onClick = { openDialer(context, offer.customer.phoneNumber) }) { Icon(Icons.Default.Call, contentDescription = "Gọi khách", tint = RideGreen) }
             }
             RouteLine(offer.pickup.address, offer.dropoff.address)
             error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
@@ -977,59 +1058,83 @@ fun RideHandoverScreen(
 
 @Composable
 fun DriverWalletScreen() {
-    var dialog by remember { mutableStateOf<String?>(null) }
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surfaceVariant).padding(18.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
         Text("Ví tài xế", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
-        Card(shape = RoundedCornerShape(24.dp), colors = CardDefaults.cardColors(containerColor = RideGreenDark)) {
-            Column(Modifier.fillMaxWidth().padding(21.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text("SỐ DƯ KHẢ DỤNG", color = MaterialTheme.colorScheme.surface.copy(alpha = .78f), style = MaterialTheme.typography.labelMedium, letterSpacing = 1.sp)
-                Text("1.250.000đ", color = MaterialTheme.colorScheme.surface, fontWeight = FontWeight.ExtraBold, fontSize = 34.sp)
-                Text("Ví của bạn đang hoạt động bình thường", color = MaterialTheme.colorScheme.surface.copy(alpha = .86f), style = MaterialTheme.typography.bodySmall)
+        Card(shape = RoundedCornerShape(24.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+            Column(Modifier.fillMaxWidth().padding(21.dp), verticalArrangement = Arrangement.spacedBy(10.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                Icon(Icons.Default.AccountBalanceWallet, contentDescription = null, tint = RideGreen, modifier = Modifier.size(38.dp))
+                Text("Ví chưa được kết nối", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
+                Text(
+                    "Số dư, lịch sử giao dịch và thao tác nạp/rút sẽ hiển thị khi dịch vụ ví được kết nối.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodySmall
+                )
             }
         }
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            Button(onClick = { dialog = "Nạp tiền" }, modifier = Modifier.weight(1f).height(52.dp), shape = RoundedCornerShape(15.dp), colors = ButtonDefaults.buttonColors(containerColor = RideGreen)) { Icon(Icons.Default.Payments, contentDescription = null); Spacer(Modifier.width(6.dp)); Text("Nạp tiền") }
-            OutlinedButton(onClick = { dialog = "Rút tiền" }, modifier = Modifier.weight(1f).height(52.dp), shape = RoundedCornerShape(15.dp)) { Icon(Icons.Default.AccountBalanceWallet, contentDescription = null); Spacer(Modifier.width(6.dp)); Text("Rút tiền") }
-        }
-        Text("Giao dịch gần đây", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
-        val transactions = listOf(
-            WalletTransaction("Chuyến đi · Chợ Bến Thành – Landmark 81", "+65.000đ", "Hôm nay · 10:42"),
-            WalletTransaction("Chiết khấu nền tảng", "−6.500đ", "Hôm nay · 10:42"),
-            WalletTransaction("Chuyến đi · Quận 3 – Quận 1", "+48.000đ", "Hôm nay · 09:15"),
-            WalletTransaction("Nạp tiền qua ngân hàng", "+200.000đ", "13 thg 10 · 18:20")
-        )
-        LazyColumn(verticalArrangement = Arrangement.spacedBy(9.dp)) {
-            items(transactions) { transaction ->
-                Card(shape = RoundedCornerShape(17.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
-                    Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Surface(shape = CircleShape, color = MaterialTheme.colorScheme.surfaceVariant, modifier = Modifier.size(42.dp)) { Box(contentAlignment = Alignment.Center) { Icon(Icons.Default.CreditCard, contentDescription = null, tint = RideGreen) } }
-                        Spacer(Modifier.width(11.dp))
-                        Column(Modifier.weight(1f)) { Text(transaction.title, color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis); Text(transaction.time, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall) }
-                        Text(transaction.amount, color = if (transaction.amount.startsWith("−")) Color(0xFFC94B4B) else RideGreen, fontWeight = FontWeight.Bold)
-                    }
-                }
-            }
-        }
-    }
-    dialog?.let { title ->
-        AlertDialog(onDismissRequest = { dialog = null }, title = { Text(title) }, text = { Text("Tính năng liên kết VNPay/MoMo và tài khoản ngân hàng sẽ khả dụng khi kết nối dịch vụ thanh toán.") }, confirmButton = { TextButton(onClick = { dialog = null }) { Text("Đã hiểu") } })
     }
 }
 
 @Composable
 fun RideHistoryScreen(driver: Boolean) {
-    val rows = if (driver) listOf("Chợ Bến Thành → Landmark 81", "Quận 3 → Bến Nhà Rồng") else listOf("Nhà thờ Đức Bà → Chợ Bến Thành", "Sân bay Tân Sơn Nhất → Quận 1")
+    var rides by remember { mutableStateOf<List<RideSummaryData>?>(null) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var isLoading by remember { mutableStateOf(true) }
+    var reloadKey by remember { mutableIntStateOf(0) }
+    LaunchedEffect(driver, reloadKey) {
+        isLoading = true
+        error = null
+        try {
+            val allRides = mutableListOf<RideSummaryData>()
+            var page = 0
+            while (true) {
+                val response = RetrofitClient.api.listMyRides(page = page, size = 100)
+                if (!response.isSuccessful) {
+                    error = "Không tải được lịch sử chuyến (${response.code()})."
+                    break
+                }
+                val ridePage = response.body()
+                if (ridePage == null) {
+                    error = "Máy chủ không trả về lịch sử chuyến."
+                    break
+                }
+                allRides += ridePage.content
+                if (!ridePage.hasNext || ridePage.content.isEmpty() || page >= 100) break
+                page += 1
+            }
+            if (error == null) rides = allRides
+        } catch (exception: Exception) {
+            error = exception.message ?: "Không kết nối được máy chủ để tải lịch sử chuyến."
+        } finally {
+            isLoading = false
+        }
+    }
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surfaceVariant).padding(18.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         Text("${if (driver) "Chuyến đã chạy" else "Hoạt động của bạn"}", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
-        rows.forEachIndexed { index, route ->
-            Card(shape = RoundedCornerShape(19.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
-                Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text(if (index == 0) "Hôm nay · 10:42" else "Hôm qua · 18:15", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelMedium)
-                        Text(if (driver) "+58.500đ" else "25.000đ", color = RideGreen, fontWeight = FontWeight.Bold)
+        when {
+            isLoading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = RideGreen) }
+            error != null -> Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(error.orEmpty(), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
+                OutlinedButton(onClick = { reloadKey++ }) { Text("Thử lại") }
+            }
+            rides.isNullOrEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text("Chưa có chuyến đi", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            else -> LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                items(rides.orEmpty(), key = { it.id }) { ride ->
+                    Card(shape = RoundedCornerShape(19.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+                        Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                Text("Chuyến #${ride.id}", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelMedium)
+                                Text("${formatVnd(ride.finalFare ?: ride.estimatedFare)}đ", color = RideGreen, fontWeight = FontWeight.Bold)
+                            }
+                            Text(
+                                "${ride.pickupAddress ?: "Chưa có điểm đón"} → ${ride.dropoffAddress ?: "Chưa có điểm trả"}",
+                                color = MaterialTheme.colorScheme.onSurface,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Text(statusLabel(ride.status), color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+                        }
                     }
-                    Text(route, color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.SemiBold)
-                    Text(if (driver) "Hoàn thành · Khách đánh giá 5 sao" else "Hoàn thành · Xe máy", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
                 }
             }
         }
@@ -1061,18 +1166,3 @@ private fun RouteLine(pickup: String, destination: String) {
         }
     }
 }
-
-@Composable
-private fun FilterPill(text: String, selected: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
-    Surface(
-        modifier = modifier.clickable(onClick = onClick),
-        shape = RoundedCornerShape(15.dp),
-        color = if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surface,
-        border = androidx.compose.foundation.BorderStroke(1.dp, if (selected) RideGreen else MaterialTheme.colorScheme.outlineVariant)
-    ) {
-        Box(Modifier.padding(horizontal = 13.dp, vertical = 12.dp), contentAlignment = Alignment.Center) {
-            Text(text, color = if (selected) RideGreenDark else MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.labelMedium, fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium, maxLines = 1)
-        }
-    }
-}
-

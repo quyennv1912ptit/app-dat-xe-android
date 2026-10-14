@@ -1,4 +1,5 @@
 import java.util.Properties
+import java.net.URI
 
 plugins {
     alias(libs.plugins.android.application)
@@ -14,11 +15,39 @@ val signingProperties = Properties().apply {
 }
 fun quotedBuildConfig(value: String): String = "\"${value.replace("\\", "\\\\").replace("\"", "\\\"")}\""
 
-val releaseBaseUrl = projectLocalProperties.getProperty("GORIDE_BASE_URL_RELEASE", "https://api.example.invalid/")
-require(releaseBaseUrl.startsWith("https://")) { "GORIDE_BASE_URL_RELEASE must use HTTPS." }
-val debugBaseUrl = projectLocalProperties.getProperty("GORIDE_BASE_URL_DEBUG", "http://192.168.1.101:8080/")
+val releaseBaseUrl = (
+        projectLocalProperties.getProperty("GORIDE_BASE_URL_RELEASE")
+            ?: providers.gradleProperty("GORIDE_BASE_URL_RELEASE").orNull
+            ?: System.getenv("GORIDE_BASE_URL_RELEASE")
+            ?: ""
+        ).trim()
+val debugBaseUrl = projectLocalProperties.getProperty("GORIDE_BASE_URL_DEBUG", "http://192.168.1.102:8080/")
 val hasReleaseSigning = listOf("storeFile", "storePassword", "keyAlias", "keyPassword")
     .all { !signingProperties.getProperty(it).isNullOrBlank() }
+
+val validateReleaseConfiguration = tasks.register("validateReleaseConfiguration") {
+    group = "verification"
+    description = "Checks production API and signing settings before packaging a release."
+    doLast {
+        val releaseUri = runCatching { URI(releaseBaseUrl) }.getOrNull()
+        require(
+            releaseUri != null &&
+                    releaseUri.scheme.equals("https", ignoreCase = true) &&
+                    !releaseUri.host.isNullOrBlank() &&
+                    releaseUri.host != "api.example.invalid" &&
+                    releaseUri.rawQuery == null &&
+                    releaseUri.rawFragment == null &&
+                    releaseBaseUrl.endsWith("/")
+        ) {
+            "Set GORIDE_BASE_URL_RELEASE to the real HTTPS backend URL in local.properties, Gradle properties, or the environment."
+        }
+        require(hasReleaseSigning) {
+            "Release packaging requires storeFile, storePassword, keyAlias, and keyPassword in keystore.properties."
+        }
+        val keystore = rootProject.file(signingProperties.getProperty("storeFile"))
+        require(keystore.isFile) { "Release keystore does not exist: ${keystore.path}" }
+    }
+}
 
 android {
     namespace = "com.example.app_dat_xe"
@@ -37,18 +66,32 @@ android {
     }
 
     signingConfigs {
+        getByName("debug") {
+            storeFile = file("app-shared-debug.keystore")
+            storePassword = "android"
+            keyAlias = "AndroidDebugKey"
+            keyPassword = "android"
+        }
+
         create("release") {
             if (hasReleaseSigning) {
                 storeFile = rootProject.file(signingProperties.getProperty("storeFile"))
                 storePassword = signingProperties.getProperty("storePassword")
                 keyAlias = signingProperties.getProperty("keyAlias")
                 keyPassword = signingProperties.getProperty("keyPassword")
+            } else {
+                storeFile = file("app-release-key.jks")
+                storePassword = "19122006"
+                keyAlias = "key0"
+                keyPassword = "19122006"
             }
         }
     }
 
     buildTypes {
         getByName("debug") {
+            signingConfig = signingConfigs.getByName("release")
+
             buildConfigField("String", "BASE_URL", quotedBuildConfig(debugBaseUrl))
             buildConfigField("String", "CLOUDINARY_CLOUD_NAME", quotedBuildConfig(projectLocalProperties.getProperty("CLOUDINARY_CLOUD_NAME", "")))
             buildConfigField("String", "CLOUDINARY_UNSIGNED_UPLOAD_PRESET", quotedBuildConfig(projectLocalProperties.getProperty("CLOUDINARY_UNSIGNED_UPLOAD_PRESET", "")))
@@ -56,24 +99,33 @@ android {
             manifestPlaceholders["facebookClientToken"] = projectLocalProperties.getProperty("FACEBOOK_CLIENT_TOKEN", "")
         }
         release {
+            signingConfig = signingConfigs.getByName("release")
+
             buildConfigField("String", "BASE_URL", quotedBuildConfig(releaseBaseUrl))
             buildConfigField("String", "CLOUDINARY_CLOUD_NAME", quotedBuildConfig(projectLocalProperties.getProperty("CLOUDINARY_CLOUD_NAME", "")))
             buildConfigField("String", "CLOUDINARY_UNSIGNED_UPLOAD_PRESET", quotedBuildConfig(projectLocalProperties.getProperty("CLOUDINARY_UNSIGNED_UPLOAD_PRESET", "")))
             manifestPlaceholders["cleartextEnabled"] = "false"
             manifestPlaceholders["facebookClientToken"] = projectLocalProperties.getProperty("FACEBOOK_CLIENT_TOKEN", "")
-            if (hasReleaseSigning) signingConfig = signingConfigs.getByName("release")
             optimization {
                 enable = false
             }
         }
     }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
     }
+
     buildFeatures {
         compose = true
         buildConfig = true
+    }
+}
+
+tasks.configureEach {
+    if (name == "preReleaseBuild") {
+        dependsOn(validateReleaseConfiguration)
     }
 }
 
@@ -100,12 +152,14 @@ dependencies {
     implementation("io.coil-kt:coil-compose:2.7.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.10.2")
 
+    // Firebase & Google Services
     implementation(platform("com.google.firebase:firebase-bom:34.2.0"))
     implementation("com.google.firebase:firebase-auth")
     implementation("com.google.firebase:firebase-messaging")
     implementation("com.google.firebase:firebase-storage")
     implementation("com.google.android.gms:play-services-auth:21.4.0")
     implementation("com.google.android.gms:play-services-location:21.3.0")
+
     implementation("com.facebook.android:facebook-login:18.3.0")
 
     testImplementation(libs.junit)

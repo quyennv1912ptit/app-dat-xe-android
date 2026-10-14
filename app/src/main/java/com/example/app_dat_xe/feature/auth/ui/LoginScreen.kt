@@ -71,7 +71,6 @@ import android.os.CancellationSignal
 import androidx.credentials.CredentialManager
 import androidx.credentials.CustomCredential
 import androidx.credentials.GetCredentialRequest
-import com.google.android.libraries.identity.googleid.GetGoogleIdOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import com.google.firebase.auth.GoogleAuthProvider
 import com.google.android.libraries.identity.googleid.GoogleIdTokenParsingException
@@ -79,6 +78,8 @@ import androidx.compose.ui.res.stringResource
 import com.example.app_dat_xe.data.remote.AvatarRequest
 import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
 import com.google.firebase.auth.FirebaseAuthUserCollisionException
+import androidx.credentials.exceptions.GetCredentialCancellationException
+import androidx.credentials.exceptions.NoCredentialException
 
 @Composable
 fun LoginScreen(onNavigateToOtp: (String, String) -> Unit
@@ -527,11 +528,12 @@ fun LoginScreen(onNavigateToOtp: (String, String) -> Unit
         try {
             val credentialManager = CredentialManager.create(context)
 
-            val googleOption =
-                GetGoogleIdOption.Builder()
-                    .setServerClientId(webClientId)
-                    .setFilterByAuthorizedAccounts(false)
-                    .build()
+            // This is a dedicated Google sign-in button, so use the button flow.
+            // Unlike GetGoogleIdOption, it can also prompt the user to add a
+            // Google account when the device has no eligible account yet.
+            val googleOption = GetSignInWithGoogleOption.Builder(
+                serverClientId = webClientId
+            ).build()
 
             val request = GetCredentialRequest.Builder()
                 .addCredentialOption(googleOption)
@@ -634,6 +636,14 @@ fun LoginScreen(onNavigateToOtp: (String, String) -> Unit
                 ).show()
             }
 
+        } catch (e: NoCredentialException) {
+            Toast.makeText(
+                context,
+                "Chưa tìm thấy tài khoản Google khả dụng. Hãy thêm tài khoản Google trên thiết bị rồi thử lại.",
+                Toast.LENGTH_LONG
+            ).show()
+        } catch (e: GetCredentialCancellationException) {
+            // Closing the account picker is not a sign-in failure.
         } catch (e: Exception) {
 
 

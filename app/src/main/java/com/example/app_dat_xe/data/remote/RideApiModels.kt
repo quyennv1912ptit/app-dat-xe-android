@@ -99,7 +99,12 @@ data class RideOfferPayload(
 
 data class RideAddressPayload(val lat: Double, val lng: Double, val address: String)
 data class RideVehiclePayload(val type: String, val transmission: String)
-data class RideCustomerPayload(val displayName: String, val rating: Double)
+data class RideCustomerPayload(
+    val displayName: String,
+    val rating: Double,
+    @SerializedName(value = "phoneNumber", alternate = ["phone"])
+    val phoneNumber: String? = null
+)
 
 data class RidePageResponse(
     val content: List<RideSummaryData> = emptyList(),

@@ -1,0 +1,6 @@
+# Copy these keys to local.properties; keep actual values out of Git.
+GORIDE_BASE_URL_DEBUG=http://192.168.1.101:8080/
+GORIDE_BASE_URL_RELEASE=https://your-api-host/
+CLOUDINARY_CLOUD_NAME=your-cloud-name
+CLOUDINARY_UNSIGNED_UPLOAD_PRESET=your-unsigned-preset
+FACEBOOK_CLIENT_TOKEN=your-facebook-client-token

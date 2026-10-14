@@ -43,4 +43,16 @@ object DeviceTokenRegistrar {
             Log.w("PUSH_REGISTRATION", "Không thể đăng ký token thiết bị", exception)
         }
     }
+
+    suspend fun unregisterCurrentInstallation(context: Context) {
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val installationId = prefs.getString(INSTALLATION_ID, null) ?: return
+        if (FirebaseAuth.getInstance().currentUser == null) return
+        val response = RetrofitClient.api.unregisterDeviceToken(installationId)
+        if (response.isSuccessful) {
+            prefs.edit().remove(PENDING_TOKEN).apply()
+        } else {
+            Log.w("PUSH_REGISTRATION", "Hủy đăng ký token thất bại: HTTP ${response.code()}")
+        }
+    }
 }

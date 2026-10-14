@@ -2,7 +2,6 @@ package com.example.app_dat_xe.data.remote
 
 import android.content.Context
 import android.net.Uri
-import com.example.app_dat_xe.R
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
@@ -17,15 +16,14 @@ object CloudinaryUploader {
     private val client = OkHttpClient()
 
     suspend fun upload(context: Context, uri: Uri): String = withContext(Dispatchers.IO) {
-        val cloudName = context.getString(R.string.cloudinary_cloud_name).trim()
-        val uploadPreset = context.getString(R.string.cloudinary_unsigned_upload_preset).trim()
-        if (cloudName.startsWith("CONFIGURE_") || uploadPreset.startsWith("CONFIGURE_")) {
-            throw IllegalStateException("Hãy cấu hình Cloudinary cloud name và unsigned upload preset trong strings.xml.")
+        val cloudName = com.example.app_dat_xe.BuildConfig.CLOUDINARY_CLOUD_NAME.trim()
+        val uploadPreset = com.example.app_dat_xe.BuildConfig.CLOUDINARY_UNSIGNED_UPLOAD_PRESET.trim()
+        if (cloudName.isBlank() || uploadPreset.isBlank()) {
+            throw IllegalStateException("Hãy cấu hình CLOUDINARY_CLOUD_NAME và CLOUDINARY_UNSIGNED_UPLOAD_PRESET trong local.properties.")
         }
 
-        val imageBytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
-            ?: throw IOException("Không đọc được ảnh đã chọn")
-        val mimeType = context.contentResolver.getType(uri) ?: "image/jpeg"
+        val imageBytes = ImageUploadCompressor.compress(context, uri)
+        val mimeType = "image/jpeg"
         val body = MultipartBody.Builder()
             .setType(MultipartBody.FORM)
             .addFormDataPart("upload_preset", uploadPreset)

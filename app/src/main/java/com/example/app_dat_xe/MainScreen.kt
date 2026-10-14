@@ -5,14 +5,11 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.content.Context
-import android.graphics.Matrix
-import android.media.ExifInterface
-import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.net.Uri
 import android.util.Log
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.compose.BackHandler
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -20,6 +17,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -33,6 +31,7 @@ import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.AccountBalanceWallet
 import androidx.compose.material3.Button
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -41,6 +40,7 @@ import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -60,6 +60,8 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import androidx.navigation.NavType
+import androidx.navigation.navArgument
 import coil.compose.AsyncImage
 import com.example.app_dat_xe.data.remote.RetrofitClient
 import com.example.app_dat_xe.data.remote.CancelRideRequest
@@ -72,7 +74,12 @@ import com.example.app_dat_xe.data.remote.CreateHandoverReportRequest
 import com.example.app_dat_xe.data.remote.HandoverPhotoRequest
 import com.example.app_dat_xe.data.remote.RideProgressRequest
 import com.example.app_dat_xe.data.remote.CloudinaryUploader
+import com.example.app_dat_xe.data.remote.ImageUploadCompressor
 import com.example.app_dat_xe.data.remote.RideStompClient
+import com.example.app_dat_xe.data.remote.RideDetailData
+import com.example.app_dat_xe.data.remote.RideAddressPayload
+import com.example.app_dat_xe.data.remote.RideVehiclePayload
+import com.example.app_dat_xe.data.remote.RideCustomerPayload
 import com.example.app_dat_xe.feature.auth.ui.OtpData
 import com.example.app_dat_xe.feature.ride.ui.CustomerHomeScreen
 import com.example.app_dat_xe.feature.ride.ui.DriverActiveTripScreen
@@ -88,12 +95,23 @@ import com.example.app_dat_xe.feature.ride.ui.SelectLocationScreen
 import com.example.app_dat_xe.feature.ride.ui.TripOptionsScreen
 import com.example.app_dat_xe.feature.ride.ui.TripTrackingScreen
 import com.example.app_dat_xe.feature.ride.ui.RidePlace
+import com.example.app_dat_xe.feature.ride.ui.CustomerVehicleRef
+import com.example.app_dat_xe.feature.ride.ui.CustomerVehicleStore
+import com.example.app_dat_xe.feature.ride.ui.MyVehiclesScreen
+import com.example.app_dat_xe.feature.ride.ui.AddVehicleScreen
+import com.example.app_dat_xe.feature.ride.ui.DriverOnboardingScreen
+import com.example.app_dat_xe.feature.ride.stepFromStatus
+import com.example.app_dat_xe.feature.ride.activeRideStatuses
+import com.example.app_dat_xe.feature.ride.formatVnd
 import com.example.app_dat_xe.data.remote.RideOfferPayload
 import com.example.app_dat_xe.tracking.DriverLocationService
 import com.example.app_dat_xe.tracking.RideEventBus
 import com.google.firebase.auth.FirebaseAuth
 import com.google.gson.JsonParser
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
@@ -101,7 +119,6 @@ import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.MultipartBody
 import okhttp3.RequestBody.Companion.toRequestBody
-import java.io.ByteArrayOutputStream
 import java.io.IOException
 
 sealed class BottomNavItem(
@@ -140,85 +157,12 @@ sealed class BottomNavItem(
     )
 }
 
+private data class RideOutcomeDialog(val title: String, val message: String, val canRetry: Boolean)
+
 /** Chuyển exception thành thông báo thân thiện với người dùng. */
 private fun Throwable.toUserMessage(default: String): String = when (this) {
     is IOException -> "Lỗi kết nối mạng, vui lòng kiểm tra lại đường truyền"
     else -> message?.takeIf { it.isNotBlank() } ?: default
-}
-
-/**
- * Đọc ảnh từ Uri, thu nhỏ (cạnh dài tối đa [maxSide]px) và nén JPEG
- * để tránh OutOfMemoryError và giảm dung lượng upload.
- * Gọi trong Dispatchers.IO.
- */
-private fun compressImageForUpload(
-    context: Context,
-    uri: Uri,
-    maxSide: Int = 1024,
-    quality: Int = 85
-): ByteArray {
-    val resolver = context.contentResolver
-
-    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-    resolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
-    if (bounds.outWidth <= 0 || bounds.outHeight <= 0) throw Exception("Tệp không hợp lệ")
-
-    var rotationDegrees = 0f
-    try {
-        resolver.openInputStream(uri)?.use { inputStream ->
-            val exif = ExifInterface(inputStream)
-            val orientation = exif.getAttributeInt(
-                ExifInterface.TAG_ORIENTATION,
-                ExifInterface.ORIENTATION_NORMAL
-            )
-            rotationDegrees = when (orientation) {
-                ExifInterface.ORIENTATION_ROTATE_90 -> 90f
-                ExifInterface.ORIENTATION_ROTATE_180 -> 180f
-                ExifInterface.ORIENTATION_ROTATE_270 -> 270f
-                else -> 0f
-            }
-        }
-    } catch (e: Exception) {
-        Log.e("EXIF_ERROR", "Không đọc được góc xoay", e)
-    }
-
-    var sample = 1
-    while (bounds.outWidth / sample > maxSide * 2 || bounds.outHeight / sample > maxSide * 2) {
-        sample *= 2
-    }
-    val decodeOptions = BitmapFactory.Options().apply { inSampleSize = sample }
-    val decoded = resolver.openInputStream(uri)?.use {
-        BitmapFactory.decodeStream(it, null, decodeOptions)
-    } ?: throw Exception("Không đọc được nội dung ảnh")
-
-    val scale = minOf(1f, maxSide.toFloat() / maxOf(decoded.width, decoded.height))
-    var bitmap = if (scale < 1f) {
-        val scaled = Bitmap.createScaledBitmap(
-            decoded,
-            (decoded.width * scale).toInt().coerceAtLeast(1),
-            (decoded.height * scale).toInt().coerceAtLeast(1),
-            true
-        )
-        if (scaled !== decoded) decoded.recycle()
-        scaled
-    } else {
-        decoded
-    }
-
-    if (rotationDegrees != 0f) {
-        val matrix = Matrix().apply { postRotate(rotationDegrees) }
-        val rotatedBitmap = Bitmap.createBitmap(
-            bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true
-        )
-        if (rotatedBitmap !== bitmap) bitmap.recycle()
-        bitmap = rotatedBitmap
-    }
-
-    return ByteArrayOutputStream().use { out ->
-        bitmap.compress(Bitmap.CompressFormat.JPEG, quality, out)
-        bitmap.recycle()
-        out.toByteArray()
-    }
 }
 
 @Composable
@@ -230,16 +174,26 @@ fun MainScreen(
     role: String?,
     onLogout: () -> Unit
 ) {
-    Log.d(
-        "MAIN_SCREEN",
-        "fullName=$fullName, phone=$phoneNumber, email=$email, role=$role"
-    )
-
     val bottomNavController = rememberNavController()
     val coroutineScope = rememberCoroutineScope()
     val context = LocalContext.current
     val prefs = remember(context) {
         context.getSharedPreferences("app_dat_xe", Context.MODE_PRIVATE)
+    }
+    var driverApprovalStatus by remember(context) {
+        mutableStateOf(prefs.getString("driver_approval_status", "PENDING") ?: "PENDING")
+    }
+    var isDriverApprovalLoading by remember(role) { mutableStateOf(role == "DRIVER") }
+    var customerVehicles by remember(context) {
+        mutableStateOf(
+            CustomerVehicleStore.load(context).ifEmpty {
+                prefs.getString("customer_vehicle_id", null)?.toLongOrNull()?.takeIf { it > 0L }
+                    ?.let { listOf(CustomerVehicleRef(it, "Xe #$it")) }.orEmpty()
+            }
+        )
+    }
+    var defaultCustomerVehicleId by remember(context) {
+        mutableStateOf(prefs.getString("customer_vehicle_id", null)?.toLongOrNull())
     }
 
     // Ảnh vừa chọn từ thư viện (hiển thị ngay, ưu tiên cao nhất)
@@ -259,8 +213,10 @@ fun MainScreen(
     var avatarError by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(role) {
+        isDriverApprovalLoading = role == "DRIVER"
         if (role.isNullOrBlank()) {
             avatarError = "Không xác định được vai trò tài khoản"
+            isDriverApprovalLoading = false
             return@LaunchedEffect
         }
 
@@ -279,7 +235,18 @@ fun MainScreen(
             )
 
             if (response.isSuccessful) {
-                serverAvatarUrl = response.body()?.avatarUrl
+                val profile = response.body()
+                serverAvatarUrl = profile?.avatarUrl
+                if (role == "DRIVER") {
+                    driverApprovalStatus = if (profile?.licenseVerified == true) {
+                        "APPROVED"
+                    } else {
+                        profile?.approvalStatus?.takeIf { it in setOf("APPROVED", "REJECTED", "PENDING") }
+                            ?: prefs.getString("driver_approval_status", "PENDING")
+                            ?: "PENDING"
+                    }
+                    prefs.edit().putString("driver_approval_status", driverApprovalStatus).apply()
+                }
                 avatarError = null
             } else {
                 Log.e("PROFILE_AVATAR", "Lỗi tải hồ sơ: HTTP ${response.code()}")
@@ -289,6 +256,8 @@ fun MainScreen(
         } catch (e: Exception) {
             Log.e("PROFILE_AVATAR", "Lỗi tải hồ sơ", e)
             avatarError = e.toUserMessage("Lỗi tải ảnh đại diện")
+        } finally {
+            isDriverApprovalLoading = false
         }
     }
 
@@ -325,7 +294,7 @@ fun MainScreen(
 
                     // Bước 3: Thu nhỏ + nén ảnh (chạy ngoài main thread)
                     val imageBytes = withContext(Dispatchers.IO) {
-                        compressImageForUpload(context, uri)
+                        ImageUploadCompressor.compress(context, uri)
                     }
 
                     // Bước 4: Tạo MultipartBody.Part (luôn là JPEG sau khi nén)
@@ -352,16 +321,8 @@ fun MainScreen(
                         serverAvatarUrl = updatedProfile.avatarUrl
                         avatarUri = null
 
-                        Log.d(
-                            "AVATAR_UPLOAD",
-                            "Upload thành công: ${updatedProfile.avatarUrl}"
-                        )
                     } else {
-                        val errorBody = response.errorBody()?.string()
-                        Log.e(
-                            "AVATAR_UPLOAD",
-                            "Upload thất bại: ${response.code()} - $errorBody"
-                        )
+                        Log.e("AVATAR_UPLOAD", "Upload ảnh thất bại: HTTP ${response.code()}")
                         throw Exception("Upload ảnh thất bại (mã lỗi ${response.code()})")
                     }
                 } catch (e: Exception) {
@@ -408,11 +369,31 @@ fun MainScreen(
     var handoverPhase by remember { mutableStateOf("PICKUP") }
     var isSubmittingHandover by remember { mutableStateOf(false) }
     var handoverError by remember { mutableStateOf<String?>(null) }
+    var pickupHandoverConfirmed by remember { mutableStateOf(false) }
+    var pickupOdometer by remember { mutableStateOf<Long?>(null) }
+    var rideOutcomeDialog by remember { mutableStateOf<RideOutcomeDialog?>(null) }
     var isAvailabilityBusy by remember { mutableStateOf(false) }
     var isLoggingOut by remember { mutableStateOf(false) }
     var customerStompClient by remember { mutableStateOf<RideStompClient?>(null) }
     val navBackStackEntry by bottomNavController.currentBackStackEntryAsState()
     val currentRoute = navBackStackEntry?.destination?.route
+
+    fun resetRideState() {
+        customerStompClient?.disconnect()
+        customerStompClient = null
+        selectedRideId = null
+        rideStatus = "IDLE"
+        finalFare = null
+        driverName = null
+        driverPhone = null
+        driverRating = null
+        driverLocationText = null
+        currentOffer = null
+        handledOfferId = null
+        activeTripStep = 0
+        pickupHandoverConfirmed = false
+        pickupOdometer = null
+    }
 
     fun showRideMessage(message: String) {
         Toast.makeText(context, message, Toast.LENGTH_LONG).show()
@@ -425,6 +406,12 @@ fun MainScreen(
         } catch (_: Exception) {
             fallback
         }
+    }
+
+    BackHandler(enabled = currentRoute in setOf(
+        "customer/finding-driver", "customer/tracking/{rideId}", "driver/active-trip", "driver/handover"
+    )) {
+        showRideMessage("Bạn cần hoàn tất hoặc hủy chuyến hiện tại trước khi rời màn hình này.")
     }
 
     fun estimateRide(vehicleId: Long) {
@@ -503,13 +490,16 @@ fun MainScreen(
                                             driverPhone = driver?.get("phone")?.takeUnless { it.isJsonNull }?.asString
                                             driverRating = driver?.get("rating")?.takeUnless { it.isJsonNull }?.asDouble
                                             if (bottomNavController.currentBackStackEntry?.destination?.route == "customer/finding-driver") {
-                                                bottomNavController.navigate("customer/tracking")
+                                                bottomNavController.navigate("customer/tracking/$rideId")
                                             }
                                         }
                                         "RIDE_UPDATED" -> {
                                             rideStatus = payload.get("status")?.asString ?: rideStatus
+                                            activeTripStep = stepFromStatus(rideStatus)
                                             if (rideStatus == "COMPLETED" && bottomNavController.currentBackStackEntry?.destination?.route != "customer/rating") {
                                                 finalFare = payload.get("finalFare")?.asLong ?: finalFare
+                                                customerStompClient?.disconnect()
+                                                customerStompClient = null
                                                 bottomNavController.navigate("customer/rating")
                                             }
                                         }
@@ -517,12 +507,20 @@ fun MainScreen(
                                             finalFare = payload.get("finalFare")?.asLong ?: finalFare
                                             rideStatus = "COMPLETED"
                                             if (bottomNavController.currentBackStackEntry?.destination?.route != "customer/rating") {
+                                                customerStompClient?.disconnect()
+                                                customerStompClient = null
                                                 bottomNavController.navigate("customer/rating")
                                             }
                                         }
                                         "RIDE_NO_DRIVER", "RIDE_CANCELLED" -> {
-                                            bookingError = "Chuyến đi đã bị hủy hoặc không tìm thấy tài xế."
-                                            showRideMessage(bookingError!!)
+                                            val noDriver = type == "RIDE_NO_DRIVER"
+                                            resetRideState()
+                                            bottomNavController.popBackStack("home", inclusive = false)
+                                            rideOutcomeDialog = RideOutcomeDialog(
+                                                title = if (noDriver) "Chưa tìm được tài xế" else "Chuyến đi đã bị hủy",
+                                                message = if (noDriver) "Bạn có thể đặt lại chuyến khi sẵn sàng." else "Trạng thái chuyến đi đã được cập nhật.",
+                                                canRetry = noDriver
+                                            )
                                         }
                                     }
                                 }
@@ -583,8 +581,7 @@ fun MainScreen(
             try {
                 val response = RetrofitClient.api.cancelRide(rideId, CancelRideRequest("Khách hàng hủy chuyến"))
                 if (response.isSuccessful) {
-                    customerStompClient?.disconnect()
-                    customerStompClient = null
+                    resetRideState()
                     bottomNavController.popBackStack("home", inclusive = false)
                 } else {
                     showRideMessage(backendError(response.errorBody()?.string(), "Không hủy được chuyến (${response.code()})."))
@@ -596,6 +593,11 @@ fun MainScreen(
     }
 
     fun updateDriverAvailability(online: Boolean) {
+        if (online && driverApprovalStatus != "APPROVED") {
+            showRideMessage("Hồ sơ tài xế cần được duyệt trước khi bật online.")
+            bottomNavController.navigate("driver/onboarding")
+            return
+        }
         if (userId == null) {
             showRideMessage("Không xác định được ID tài xế.")
             return
@@ -657,7 +659,7 @@ fun MainScreen(
                 }
                 selectedRideId = offer.rideId
                 rideStatus = "DRIVER_ASSIGNED"
-                activeTripStep = 0
+                activeTripStep = stepFromStatus(rideStatus)
                 bottomNavController.navigate("driver/active-trip") {
                     popUpTo("driver/request") { inclusive = true }
                     launchSingleTop = true
@@ -697,13 +699,10 @@ fun MainScreen(
                     return@launch
                 }
                 rideStatus = response.body()?.currentStatus ?: rideStatus
+                activeTripStep = stepFromStatus(rideStatus)
                 if (step == 6) {
-                    currentOffer = null
-                    selectedRideId = null
-                    activeTripStep = 0
+                    resetRideState()
                     bottomNavController.popBackStack("home", inclusive = false)
-                } else {
-                    activeTripStep = step + 1
                 }
             } catch (exception: Exception) {
                 tripProgressError = exception.message ?: "Không kết nối được máy chủ để cập nhật chuyến."
@@ -724,8 +723,12 @@ fun MainScreen(
             isSubmittingHandover = true
             handoverError = null
             try {
-                val uploadedPhotos = photos.entries.map { (angle, uri) ->
-                    HandoverPhotoRequest(angle, CloudinaryUploader.upload(context, uri))
+                val uploadedPhotos = coroutineScope {
+                    photos.entries.map { (angle, uri) ->
+                        async(Dispatchers.IO) {
+                            HandoverPhotoRequest(angle, CloudinaryUploader.upload(context, uri))
+                        }
+                    }.awaitAll()
                 }
                 val request = CreateHandoverReportRequest(odometer, fuelLevel, notes, uploadedPhotos)
                 val response = if (handoverPhase == "PICKUP") {
@@ -739,6 +742,10 @@ fun MainScreen(
                 }
                 activeTripStep = if (handoverPhase == "PICKUP") 3 else 6
                 rideStatus = if (handoverPhase == "PICKUP") "VEHICLE_HANDOVER" else "VEHICLE_RETURNED"
+                if (handoverPhase == "PICKUP") {
+                    pickupHandoverConfirmed = false
+                    pickupOdometer = odometer
+                }
                 bottomNavController.popBackStack()
             } catch (exception: Exception) {
                 handoverError = exception.message ?: "Không tải được ảnh bàn giao lên máy chủ."
@@ -791,7 +798,6 @@ fun MainScreen(
                 }
                 isDriverOnline = false
                 prefs.edit().putBoolean("driver_online", false).apply()
-                onLogout()
             } catch (exception: Exception) {
                 if (isDriver && userId != null && (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
                         ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED)
@@ -801,7 +807,14 @@ fun MainScreen(
                 }
                 isLoggingOut = false
                 showRideMessage(exception.message ?: "Không đồng bộ được trạng thái offline; hãy thử lại.")
+                return@launch
             }
+            try {
+                DeviceTokenRegistrar.unregisterCurrentInstallation(context)
+            } catch (exception: Exception) {
+                Log.w("PUSH_REGISTRATION", "Không hủy được đăng ký thông báo của thiết bị")
+            }
+            onLogout()
         }
     }
 
@@ -826,6 +839,76 @@ fun MainScreen(
             }
         }
     }
+    LaunchedEffect(userId, role) {
+        if (userId == null || role.isNullOrBlank()) return@LaunchedEffect
+        try {
+            val ridesResponse = RetrofitClient.api.listMyRides(page = 0, size = 100)
+            if (!ridesResponse.isSuccessful) return@LaunchedEffect
+            val summary = ridesResponse.body()?.content.orEmpty()
+                .firstOrNull { it.status in activeRideStatuses } ?: return@LaunchedEffect
+            val detailResponse = RetrofitClient.api.getRideDetail(summary.id)
+            if (!detailResponse.isSuccessful) return@LaunchedEffect
+            val detail = detailResponse.body() ?: return@LaunchedEffect
+            if (detail.status !in activeRideStatuses) return@LaunchedEffect
+            if (role == "DRIVER" && detail.driverId != userId) return@LaunchedEffect
+
+            selectedRideId = detail.id
+            rideStatus = detail.status
+            finalFare = detail.finalFare ?: detail.estimatedFare
+            pickupPlace = RidePlace(detail.pickupAddress.orEmpty(), detail.pickup.lat, detail.pickup.lng)
+            destinationPlace = RidePlace(detail.dropoffAddress.orEmpty(), detail.dropoff.lat, detail.dropoff.lng)
+            val pickupReport = detail.handoverReports.firstOrNull { it.phase == "PICKUP" }
+            pickupOdometer = pickupReport?.odometer
+            pickupHandoverConfirmed = pickupReport?.confirmedByCustomer == true
+
+            if (role == "CUSTOMER") {
+                connectCustomerRideUpdates(detail.id)
+                bottomNavController.navigate("customer/tracking/${detail.id}") { launchSingleTop = true }
+            } else {
+                currentOffer = RideOfferPayload(
+                    rideId = detail.id,
+                    expiresAt = System.currentTimeMillis(),
+                    pickup = RideAddressPayload(detail.pickup.lat ?: 0.0, detail.pickup.lng ?: 0.0, detail.pickupAddress.orEmpty()),
+                    dropoff = RideAddressPayload(detail.dropoff.lat ?: 0.0, detail.dropoff.lng ?: 0.0, detail.dropoffAddress.orEmpty()),
+                    distanceToPickupKm = 0.0,
+                    etaToPickupMin = 0,
+                    tripDistanceKm = 0.0,
+                    estDurationMin = 0,
+                    fareEstimate = detail.finalFare ?: detail.estimatedFare,
+                    driverEarning = detail.finalFare ?: detail.estimatedFare,
+                    paymentMethod = "CASH",
+                    vehicle = RideVehiclePayload("CAR", "AUTOMATIC"),
+                    customer = RideCustomerPayload("Khách hàng", 0.0),
+                    note = null
+                )
+                activeTripStep = stepFromStatus(detail.status)
+                bottomNavController.navigate("driver/active-trip") { launchSingleTop = true }
+            }
+        } catch (exception: Exception) {
+            Log.w("RIDE_RESTORE", "Không khôi phục được chuyến đang hoạt động")
+        }
+    }
+
+    LaunchedEffect(isDriver, selectedRideId, rideStatus) {
+        val rideId = selectedRideId
+        if (!isDriver || rideId == null || rideStatus != "VEHICLE_HANDOVER") return@LaunchedEffect
+        while (true) {
+            try {
+                val response = RetrofitClient.api.getRideDetail(rideId)
+                if (response.isSuccessful) {
+                    val report = response.body()?.handoverReports?.firstOrNull { it.phase == "PICKUP" }
+                    if (report?.confirmedByCustomer == true) {
+                        pickupHandoverConfirmed = true
+                        break
+                    }
+                }
+            } catch (exception: Exception) {
+                Log.w("RIDE_HANDOVER", "Chưa kiểm tra được xác nhận bàn giao")
+            }
+            delay(3_000)
+        }
+    }
+
     LaunchedEffect(isDriver) {
         if (isDriver) {
             RideEventBus.events.collect { event ->
@@ -836,6 +919,7 @@ fun MainScreen(
                     when (type) {
                         "RIDE_OFFER" -> {
                             val incoming = com.google.gson.Gson().fromJson(payload, RideOfferPayload::class.java)
+                                .copy(serverTimeOffsetMs = (root.get("serverTime")?.takeUnless { it.isJsonNull }?.asLong ?: System.currentTimeMillis()) - System.currentTimeMillis())
                             currentOffer = incoming
                             handledOfferId = null
                             offerError = null
@@ -851,7 +935,10 @@ fun MainScreen(
                         }
                         "RIDE_UPDATED" -> {
                             val status = payload.get("status")?.asString
-                            if (status != null) rideStatus = status
+                            if (status != null) {
+                                rideStatus = status
+                                activeTripStep = stepFromStatus(status)
+                            }
                         }
                     }
                 } catch (exception: Exception) {
@@ -861,8 +948,15 @@ fun MainScreen(
         }
     }
 
-    LaunchedEffect(isDriver, userId) {
+    LaunchedEffect(isDriver, userId, driverApprovalStatus, isDriverApprovalLoading) {
         if (!isDriver || !isDriverOnline || userId == null) return@LaunchedEffect
+        if (isDriverApprovalLoading) return@LaunchedEffect
+        if (driverApprovalStatus != "APPROVED") {
+            isDriverOnline = false
+            prefs.edit().putBoolean("driver_online", false).apply()
+            updateDriverAvailability(false)
+            return@LaunchedEffect
+        }
         val hasLocationPermission = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
             ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
         if (hasLocationPermission) {
@@ -908,7 +1002,7 @@ fun MainScreen(
         NavHost(
             navController = bottomNavController,
             startDestination = BottomNavItem.Home.route,
-            modifier = Modifier.padding(innerPadding)
+            modifier = Modifier.padding(innerPadding).consumeWindowInsets(innerPadding)
         ) {
 
             // TRANG CHỦ
@@ -916,7 +1010,9 @@ fun MainScreen(
                 if (isDriver) {
                     DriverHomeScreen(
                         isOnline = isDriverOnline,
-                        isBusy = isAvailabilityBusy,
+                        isBusy = isAvailabilityBusy || isDriverApprovalLoading,
+                        approvalStatus = driverApprovalStatus,
+                        onOpenOnboarding = { bottomNavController.navigate("driver/onboarding") },
                         onOnlineChange = { online ->
                             if (!online) {
                                 updateDriverAvailability(false)
@@ -968,15 +1064,79 @@ fun MainScreen(
                 TripOptionsScreen(
                     pickup = pickupPlace,
                     destination = destinationPlace,
-                    initialVehicleId = prefs.getString("customer_vehicle_id", null)?.toLongOrNull(),
+                    initialVehicleId = defaultCustomerVehicleId,
+                    vehicles = customerVehicles,
                     estimate = estimate,
                     estimatedVehicleId = estimatedVehicleId,
                     isEstimating = isEstimating,
                     estimateError = estimateError,
                     bookingError = bookingError,
                     onBack = { bottomNavController.popBackStack() },
+                    onManageVehicles = { bottomNavController.navigate("customer/vehicles") },
+                    onVehicleSelected = { vehicleId ->
+                        defaultCustomerVehicleId = vehicleId
+                        prefs.edit().putString("customer_vehicle_id", vehicleId.toString()).apply()
+                    },
                     onEstimate = { vehicleId -> estimateRide(vehicleId) },
                     onBook = { vehicleId, paymentMethod -> createRide(vehicleId, paymentMethod) }
+                )
+            }
+
+            composable("customer/vehicles") {
+                MyVehiclesScreen(
+                    vehicles = customerVehicles,
+                    defaultVehicleId = defaultCustomerVehicleId,
+                    onBack = { bottomNavController.popBackStack() },
+                    onAdd = { bottomNavController.navigate("customer/vehicles/add") },
+                    onSelect = { vehicle ->
+                        defaultCustomerVehicleId = vehicle.id
+                        prefs.edit().putString("customer_vehicle_id", vehicle.id.toString()).apply()
+                        bottomNavController.popBackStack("customer/options", inclusive = false)
+                    },
+                    onRemove = { vehicle ->
+                        customerVehicles = customerVehicles.filterNot { it.id == vehicle.id }
+                        CustomerVehicleStore.save(context, customerVehicles)
+                        if (defaultCustomerVehicleId == vehicle.id) {
+                            defaultCustomerVehicleId = customerVehicles.firstOrNull()?.id
+                            prefs.edit().putString("customer_vehicle_id", defaultCustomerVehicleId?.toString()).apply()
+                        }
+                    }
+                )
+            }
+
+            composable("customer/vehicles/add") {
+                AddVehicleScreen(
+                    onBack = { bottomNavController.popBackStack() },
+                    onSave = { vehicle ->
+                        customerVehicles = (customerVehicles.filterNot { it.id == vehicle.id } + vehicle)
+                        CustomerVehicleStore.save(context, customerVehicles)
+                        defaultCustomerVehicleId = vehicle.id
+                        prefs.edit().putString("customer_vehicle_id", vehicle.id.toString()).apply()
+                        bottomNavController.popBackStack("customer/options", inclusive = false)
+                    }
+                )
+            }
+
+            composable("driver/onboarding") {
+                DriverOnboardingScreen(
+                    initialLicenseNumber = prefs.getString("driver_license_number", "").orEmpty(),
+                    initialLicenseClass = prefs.getString("driver_license_class", "").orEmpty(),
+                    initialExperience = prefs.getString("driver_experience", "").orEmpty(),
+                    initialPhoto = prefs.getString("driver_license_photo", null),
+                    approvalStatus = driverApprovalStatus,
+                    onBack = { bottomNavController.popBackStack() },
+                    onSaveDraft = { licenseNumber, licenseClass, experience, photo ->
+                        prefs.edit()
+                            .putString("driver_license_number", licenseNumber)
+                            .putString("driver_license_class", licenseClass)
+                            .putString("driver_experience", experience)
+                            .putString("driver_license_photo", photo)
+                            .putString("driver_approval_status", "PENDING")
+                            .apply()
+                        driverApprovalStatus = "PENDING"
+                        showRideMessage("Đã lưu bản nháp. Chưa thể gửi duyệt vì backend chưa có API onboarding.")
+                        bottomNavController.popBackStack()
+                    }
                 )
             }
 
@@ -989,7 +1149,11 @@ fun MainScreen(
                 )
             }
 
-            composable("customer/tracking") {
+            composable(
+                route = "customer/tracking/{rideId}",
+                arguments = listOf(navArgument("rideId") { type = NavType.LongType })
+            ) { entry ->
+                val routeRideId = entry.arguments?.getLong("rideId") ?: selectedRideId ?: return@composable
                 TripTrackingScreen(
                     pickup = pickupPlace,
                     destination = destinationPlace,
@@ -1000,7 +1164,7 @@ fun MainScreen(
                     driverLocationText = driverLocationText,
                     onConfirmPickupHandover = { confirmPickupHandover() },
                     onCancel = { cancelCustomerRide() },
-                    onBack = { bottomNavController.popBackStack() }
+                    onBack = { showRideMessage("Chuyến đang diễn ra. Hãy hoàn tất hoặc hủy chuyến trước khi rời màn hình.") }
                 )
             }
 
@@ -1025,10 +1189,11 @@ fun MainScreen(
                     rideId = selectedRideId ?: currentOffer?.rideId ?: 0L,
                     offer = currentOffer ?: return@composable,
                     step = activeTripStep,
+                    pickupHandoverConfirmed = pickupHandoverConfirmed,
                     isUpdating = isUpdatingTrip,
                     error = tripProgressError,
                     onAdvance = { step -> advanceDriverTrip(step) },
-                    onBack = { bottomNavController.popBackStack() }
+                    onBack = { showRideMessage("Chuyến đang diễn ra. Hãy cập nhật trạng thái chuyến trước khi rời màn hình.") }
                 )
             }
 
@@ -1036,6 +1201,7 @@ fun MainScreen(
                 RideHandoverScreen(
                     rideId = selectedRideId ?: 0L,
                     phase = handoverPhase,
+                    initialOdometer = pickupOdometer,
                     isSubmitting = isSubmittingHandover,
                     error = handoverError,
                     onBack = { bottomNavController.popBackStack() },
@@ -1191,5 +1357,18 @@ fun MainScreen(
                 }
             }
         }
+    }
+    rideOutcomeDialog?.let { outcome ->
+        AlertDialog(
+            onDismissRequest = { rideOutcomeDialog = null },
+            title = { Text(outcome.title) },
+            text = { Text(outcome.message) },
+            confirmButton = {
+                TextButton(onClick = {
+                    rideOutcomeDialog = null
+                    if (outcome.canRetry) bottomNavController.navigate("customer/select-location")
+                }) { Text(if (outcome.canRetry) "Đặt chuyến khác" else "Đóng") }
+            }
+        )
     }
 }

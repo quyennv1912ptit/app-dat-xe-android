@@ -1,8 +1,24 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
     id("com.google.gms.google-services")
 }
+
+val projectLocalProperties = Properties().apply {
+    rootProject.file("local.properties").takeIf { it.exists() }?.inputStream()?.use(::load)
+}
+val signingProperties = Properties().apply {
+    rootProject.file("keystore.properties").takeIf { it.exists() }?.inputStream()?.use(::load)
+}
+fun quotedBuildConfig(value: String): String = "\"${value.replace("\\", "\\\\").replace("\"", "\\\"")}\""
+
+val releaseBaseUrl = projectLocalProperties.getProperty("GORIDE_BASE_URL_RELEASE", "https://api.example.invalid/")
+require(releaseBaseUrl.startsWith("https://")) { "GORIDE_BASE_URL_RELEASE must use HTTPS." }
+val debugBaseUrl = projectLocalProperties.getProperty("GORIDE_BASE_URL_DEBUG", "http://192.168.1.101:8080/")
+val hasReleaseSigning = listOf("storeFile", "storePassword", "keyAlias", "keyPassword")
+    .all { !signingProperties.getProperty(it).isNullOrBlank() }
 
 android {
     namespace = "com.example.app_dat_xe"
@@ -22,19 +38,30 @@ android {
 
     signingConfigs {
         create("release") {
-            storeFile = file("app-release-key.jks")
-            storePassword = "19122006"
-            keyAlias = "key0"
-            keyPassword = "19122006"
+            if (hasReleaseSigning) {
+                storeFile = rootProject.file(signingProperties.getProperty("storeFile"))
+                storePassword = signingProperties.getProperty("storePassword")
+                keyAlias = signingProperties.getProperty("keyAlias")
+                keyPassword = signingProperties.getProperty("keyPassword")
+            }
         }
     }
 
     buildTypes {
         getByName("debug") {
-            signingConfig = signingConfigs.getByName("release")
+            buildConfigField("String", "BASE_URL", quotedBuildConfig(debugBaseUrl))
+            buildConfigField("String", "CLOUDINARY_CLOUD_NAME", quotedBuildConfig(projectLocalProperties.getProperty("CLOUDINARY_CLOUD_NAME", "")))
+            buildConfigField("String", "CLOUDINARY_UNSIGNED_UPLOAD_PRESET", quotedBuildConfig(projectLocalProperties.getProperty("CLOUDINARY_UNSIGNED_UPLOAD_PRESET", "")))
+            manifestPlaceholders["cleartextEnabled"] = "true"
+            manifestPlaceholders["facebookClientToken"] = projectLocalProperties.getProperty("FACEBOOK_CLIENT_TOKEN", "")
         }
         release {
-            signingConfig = signingConfigs.getByName("release")
+            buildConfigField("String", "BASE_URL", quotedBuildConfig(releaseBaseUrl))
+            buildConfigField("String", "CLOUDINARY_CLOUD_NAME", quotedBuildConfig(projectLocalProperties.getProperty("CLOUDINARY_CLOUD_NAME", "")))
+            buildConfigField("String", "CLOUDINARY_UNSIGNED_UPLOAD_PRESET", quotedBuildConfig(projectLocalProperties.getProperty("CLOUDINARY_UNSIGNED_UPLOAD_PRESET", "")))
+            manifestPlaceholders["cleartextEnabled"] = "false"
+            manifestPlaceholders["facebookClientToken"] = projectLocalProperties.getProperty("FACEBOOK_CLIENT_TOKEN", "")
+            if (hasReleaseSigning) signingConfig = signingConfigs.getByName("release")
             optimization {
                 enable = false
             }
@@ -46,6 +73,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 }
 

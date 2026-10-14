@@ -1,6 +1,6 @@
 package com.example.app_dat_xe.feature.auth.ui
 
-import android.util.Log
+import android.app.Activity
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -42,6 +42,8 @@ import kotlin.time.Duration.Companion.seconds
 import android.widget.Toast
 import androidx.compose.ui.platform.LocalContext
 import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.FirebaseException
+import com.google.firebase.auth.PhoneAuthOptions
 import com.google.firebase.auth.PhoneAuthProvider
 import androidx.compose.runtime.rememberCoroutineScope
 import com.example.app_dat_xe.data.remote.AvatarRequest
@@ -63,6 +65,7 @@ fun OtpVerifyScreen(phoneNumber: String,
     var otp by remember { mutableStateOf("") }
     var timer by remember { mutableIntStateOf(60) }
     var isLoading by remember { mutableStateOf(false) }
+    var isResending by remember { mutableStateOf(false) }
     val auth = FirebaseAuth.getInstance()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -82,6 +85,38 @@ fun OtpVerifyScreen(phoneNumber: String,
             timer--
         }
     }
+    fun resendOtp() {
+        val activity = context as? Activity
+        if (activity == null) {
+            Toast.makeText(context, "Không thể mở xác thực điện thoại trên màn hình này.", Toast.LENGTH_LONG).show()
+            return
+        }
+        val optionsBuilder = PhoneAuthOptions.newBuilder(auth)
+            .setPhoneNumber(phoneNumber)
+            .setTimeout(60L, java.util.concurrent.TimeUnit.SECONDS)
+            .setActivity(activity)
+            .setCallbacks(object : PhoneAuthProvider.OnVerificationStateChangedCallbacks() {
+                override fun onVerificationCompleted(credential: com.google.firebase.auth.PhoneAuthCredential) = Unit
+
+                override fun onVerificationFailed(exception: FirebaseException) {
+                    isResending = false
+                    Toast.makeText(context, "Gửi lại OTP thất bại: ${exception.message}", Toast.LENGTH_LONG).show()
+                }
+
+                override fun onCodeSent(verificationId: String, token: PhoneAuthProvider.ForceResendingToken) {
+                    OtpData.verificationId = verificationId
+                    OtpData.forceResendingToken = token
+                    otp = ""
+                    timer = 60
+                    isResending = false
+                    Toast.makeText(context, "Đã gửi mã OTP mới.", Toast.LENGTH_SHORT).show()
+                    focusRequester.requestFocus()
+                }
+            })
+        OtpData.forceResendingToken?.let(optionsBuilder::setForceResendingToken)
+        isResending = true
+        PhoneAuthProvider.verifyPhoneNumber(optionsBuilder.build())
+    }
     fun verifyOtp() {
         val verificationId = OtpData.verificationId
 
@@ -100,27 +135,15 @@ fun OtpVerifyScreen(phoneNumber: String,
             verificationId,
             otp
         )
-        Log.d(
-            "OTP_DEBUG",
-            "provider = $provider"
-        )
 
-        Log.d(
-            "OTP_DEBUG",
-            "verificationId = ${verificationId.take(10)}..."
-        )
+
+
 
         if (provider == "Facebook") {
-            Log.d(
-                "OTP_DEBUG",
-                "Firebase currentUser = ${auth.currentUser?.uid}"
-            )
+
         }
 
-        Log.d(
-            "OTP_DEBUG",
-            "Chuẩn bị signInWithCredential"
-        )
+
 
         val authTask = if (provider == "Facebook" || provider == "Google") {
             val currentUser = auth.currentUser
@@ -136,10 +159,7 @@ fun OtpVerifyScreen(phoneNumber: String,
         authTask
             .addOnSuccessListener { result ->
 
-                Log.d(
-                    "OTP_DEBUG",
-                    "signInWithCredential SUCCESS"
-                )
+
 
                 val user = result.user
 
@@ -148,10 +168,7 @@ fun OtpVerifyScreen(phoneNumber: String,
                     return@addOnSuccessListener
                 }
 
-                Log.d(
-                    "OTP_DEBUG",
-                    "Bắt đầu lấy Firebase ID Token"
-                )
+
 
                 user.getIdToken(true)
                     .addOnSuccessListener { tokenResult ->
@@ -174,7 +191,7 @@ fun OtpVerifyScreen(phoneNumber: String,
                         OtpData.phoneNumber = phoneNumber
 
                         scope.launch {
-                            Log.d("OTP_DEBUG", "ĐANG GỌI BACKEND /api/auth/login")
+
                             try {
 
                                 val response =
@@ -223,20 +240,11 @@ fun OtpVerifyScreen(phoneNumber: String,
                                             val providerIdToken = OtpData.providerIdToken
                                             val photoUrl = OtpData.providerPhotoUrl
 
-                                            Log.d(
-                                                "PROVIDER_AVATAR",
-                                                "Provider = $provider"
-                                            )
 
-                                            Log.d(
-                                                "PROVIDER_AVATAR",
-                                                "Photo URL = $photoUrl"
-                                            )
 
-                                            Log.d(
-                                                "PROVIDER_AVATAR",
-                                                "Role = ${loginResult.role ?: role}"
-                                            )
+
+
+
 
                                             if (!providerIdToken.isNullOrBlank() &&
                                                 !photoUrl.isNullOrBlank()
@@ -251,42 +259,25 @@ fun OtpVerifyScreen(phoneNumber: String,
                                                             )
                                                         )
 
-                                                    Log.d(
-                                                        "PROVIDER_AVATAR",
-                                                        "Cập nhật avatar HTTP = ${avatarResponse.code()}"
-                                                    )
+
 
                                                     if (!avatarResponse.isSuccessful) {
-                                                        Log.e(
-                                                            "PROVIDER_AVATAR",
-                                                            "Lưu avatar thất bại: ${
-                                                                avatarResponse.errorBody()?.string()
-                                                            }"
-                                                        )
+
                                                     }
 
                                                 } catch (e: Exception) {
-                                                    Log.e(
-                                                        "PROVIDER_AVATAR",
-                                                        "Lỗi gọi API cập nhật avatar",
-                                                        e
-                                                    )
+
                                                 }
 
                                             } else {
-                                                Log.e(
-                                                    "PROVIDER_AVATAR",
-                                                    "Thiếu providerIdToken hoặc photoUrl"
-                                                )
+
                                             }
                                         }
                                         isLoading = false
 
-                                        Log.d(
-                                            "OTP_DEBUG",
-                                            "OTP thành công, chuyển trang chủ, role = ${loginResult.role}"
-                                        )
 
+
+                                        OtpData.clear()
                                         onLoginSuccess(loginResult)
 
                                     } else {
@@ -301,13 +292,6 @@ fun OtpVerifyScreen(phoneNumber: String,
 
                                 } else {
                                     isLoading = false
-
-                                    val errorMessage = response.errorBody()?.string()
-
-                                    Log.e(
-                                        "OTP_DEBUG",
-                                        "Backend error: HTTP ${response.code()} - $errorMessage"
-                                    )
 
                                     if (
                                         provider != "Google" &&
@@ -353,11 +337,7 @@ fun OtpVerifyScreen(phoneNumber: String,
                 // OTP SAI
                 isLoading = false
 
-                Log.e(
-                    "OTP_DEBUG",
-                    "OTP FAILED: ${e.message}",
-                    e
-                )
+
 
                 Toast.makeText(
                     context,
@@ -451,13 +431,10 @@ fun OtpVerifyScreen(phoneNumber: String,
             )
         } else {
             TextButton(
-                onClick = {
-                    timer = 60
-                    // TODO: Gọi API gửi lại OTP ở đây
-                    focusRequester.requestFocus()
-                }
+                onClick = { resendOtp() },
+                enabled = !isResending
             ) {
-                Text("Gửi lại mã", fontWeight = FontWeight.Bold)
+                Text(if (isResending) "Đang gửi mã…" else "Gửi lại mã", fontWeight = FontWeight.Bold)
             }
         }
 

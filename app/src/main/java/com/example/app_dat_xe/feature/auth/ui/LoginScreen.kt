@@ -45,7 +45,6 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.credentials.GetCredentialException
 import android.os.Bundle
-import android.util.Log
 import androidx.compose.foundation.layout.Row
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.runtime.DisposableEffect
@@ -89,7 +88,7 @@ fun LoginScreen(onNavigateToOtp: (String, String) -> Unit
     var role by remember { mutableStateOf("CUSTOMER") }
     val context = LocalContext.current
     val webClientId = stringResource(R.string.default_web_client_id)
-    Log.d("GOOGLE_LOGIN", "webClientId = $webClientId")
+
     val activity = context as Activity
     val auth = FirebaseAuth.getInstance()
     val callbackManager = remember {
@@ -97,10 +96,7 @@ fun LoginScreen(onNavigateToOtp: (String, String) -> Unit
     }
     fun sendFacebookTokenToBackend(idToken: String) {
 
-        Log.d(
-            "FACEBOOK_LOGIN",
-            "4. Bắt đầu gọi Backend"
-        )
+
 
         CoroutineScope(Dispatchers.IO).launch {
 
@@ -113,10 +109,7 @@ fun LoginScreen(onNavigateToOtp: (String, String) -> Unit
                     )
                 )
 
-                Log.d(
-                    "FACEBOOK_LOGIN",
-                    "5. HTTP = ${response.code()}"
-                )
+
 
                 withContext(Dispatchers.Main) {
 
@@ -124,30 +117,18 @@ fun LoginScreen(onNavigateToOtp: (String, String) -> Unit
 
                         val result = response.body()
 
-                        Log.d(
-                            "FACEBOOK_LOGIN",
-                            "6. RESULT = $result"
-                        )
+
 
                         if (result == null) {
-                            Log.e(
-                                "FACEBOOK_LOGIN",
-                                "Backend trả body = null"
-                            )
+
                             return@withContext
                         }
 
-                        Log.d(
-                            "FACEBOOK_LOGIN",
-                            "7. ROLE = ${result.role}"
-                        )
+
 
                         if (result.role == "LINK_PHONE") {
 
-                            Log.d(
-                                "FACEBOOK_LOGIN",
-                                "8. Chuyển sang LinkPhoneScreen"
-                            )
+
 
                             OtpData.facebookIdToken = idToken
                             OtpData.providerIdToken = idToken
@@ -159,10 +140,7 @@ fun LoginScreen(onNavigateToOtp: (String, String) -> Unit
 
                         } else {
 
-                            Log.d(
-                                "FACEBOOK_LOGIN",
-                                "8. Chuyển vào Main: ${result.role}"
-                            )
+
 
                             onLoginSuccess(result)
                         }
@@ -172,15 +150,9 @@ fun LoginScreen(onNavigateToOtp: (String, String) -> Unit
                         val errorBody =
                             response.errorBody()?.string()
 
-                        Log.e(
-                            "FACEBOOK_LOGIN",
-                            "Backend HTTP ERROR = ${response.code()}"
-                        )
 
-                        Log.e(
-                            "FACEBOOK_LOGIN",
-                            "ERROR BODY = $errorBody"
-                        )
+
+
 
                         Toast.makeText(
                             context,
@@ -192,11 +164,7 @@ fun LoginScreen(onNavigateToOtp: (String, String) -> Unit
 
             } catch (e: Exception) {
 
-                Log.e(
-                    "FACEBOOK_LOGIN",
-                    "Gọi backend thất bại",
-                    e
-                )
+
 
                 withContext(Dispatchers.Main) {
 
@@ -233,10 +201,7 @@ fun LoginScreen(onNavigateToOtp: (String, String) -> Unit
 
                 override fun onSuccess(result: LoginResult) {
 
-                    Log.d(
-                        "FACEBOOK_LOGIN",
-                        "Facebook User ID = ${result.accessToken.userId}"
-                    )
+
 
                     val facebookCredential = FacebookAuthProvider.getCredential(result.accessToken.token)
                     val facebookToken = result.accessToken
@@ -251,7 +216,7 @@ fun LoginScreen(onNavigateToOtp: (String, String) -> Unit
                                 OtpData.providerPhotoUrl = pictureUrl
                             }
                         } catch (e: Exception) {
-                            Log.e("FACEBOOK_LOGIN", "Lỗi đọc JSON ảnh Facebook", e)
+
                         }
                     }
 
@@ -265,10 +230,7 @@ fun LoginScreen(onNavigateToOtp: (String, String) -> Unit
 
                             if (task.isSuccessful) {
 
-                                Log.d(
-                                    "FACEBOOK_LOGIN",
-                                    "1. Firebase Facebook login SUCCESS"
-                                )
+
 
                                 auth.currentUser
                                     ?.getIdToken(true)
@@ -281,28 +243,18 @@ fun LoginScreen(onNavigateToOtp: (String, String) -> Unit
 
                                             if (idToken != null) {
 
-                                                Log.d(
-                                                    "FACEBOOK_LOGIN",
-                                                    "2. Firebase ID Token SUCCESS"
-                                                )
+
 
                                                 sendFacebookTokenToBackend(idToken)
 
                                             } else {
 
-                                                Log.e(
-                                                    "FACEBOOK_LOGIN",
-                                                    "Firebase ID Token = null"
-                                                )
+
                                             }
 
                                         } else {
 
-                                            Log.e(
-                                                "FACEBOOK_LOGIN",
-                                                "Lấy Firebase ID Token FAILED",
-                                                tokenTask.exception
-                                            )
+
                                         }
                                     }
 
@@ -310,18 +262,11 @@ fun LoginScreen(onNavigateToOtp: (String, String) -> Unit
 
                                 val exception = task.exception
 
-                                Log.e(
-                                    "FACEBOOK_LOGIN",
-                                    "Firebase Facebook login FAILED",
-                                    exception
-                                )
+
 
                                 if (exception is FirebaseAuthUserCollisionException) {
 
-                                    Log.d(
-                                        "FACEBOOK_LOGIN",
-                                        "Email đã tồn tại → cần đăng nhập Google trước"
-                                    )
+
 
                                     CoroutineScope(Dispatchers.Main).launch {
 
@@ -375,19 +320,13 @@ fun LoginScreen(onNavigateToOtp: (String, String) -> Unit
                                                 )
                                                     .addOnSuccessListener {
 
-                                                        Log.d(
-                                                            "FACEBOOK_LOGIN",
-                                                            "Google Firebase login SUCCESS"
-                                                        )
+
 
                                                         val currentUser =
                                                             auth.currentUser
 
                                                         if (currentUser == null) {
-                                                            Log.e(
-                                                                "FACEBOOK_LOGIN",
-                                                                "currentUser = null"
-                                                            )
+
                                                             return@addOnSuccessListener
                                                         }
 
@@ -397,10 +336,7 @@ fun LoginScreen(onNavigateToOtp: (String, String) -> Unit
                                                             )
                                                             .addOnSuccessListener {
 
-                                                                Log.d(
-                                                                    "FACEBOOK_LOGIN",
-                                                                    "Facebook link SUCCESS"
-                                                                )
+
 
                                                                 currentUser
                                                                     .getIdToken(true)
@@ -411,10 +347,7 @@ fun LoginScreen(onNavigateToOtp: (String, String) -> Unit
 
                                                                         if (idToken != null) {
 
-                                                                            Log.d(
-                                                                                "FACEBOOK_LOGIN",
-                                                                                "Firebase ID Token SUCCESS"
-                                                                            )
+
 
                                                                             sendFacebookTokenToBackend(
                                                                                 idToken
@@ -424,11 +357,7 @@ fun LoginScreen(onNavigateToOtp: (String, String) -> Unit
                                                             }
                                                             .addOnFailureListener { e ->
 
-                                                                Log.e(
-                                                                    "FACEBOOK_LOGIN",
-                                                                    "Facebook link FAILED",
-                                                                    e
-                                                                )
+
 
                                                                 Toast.makeText(
                                                                     context,
@@ -439,11 +368,7 @@ fun LoginScreen(onNavigateToOtp: (String, String) -> Unit
                                                     }
                                                     .addOnFailureListener { e ->
 
-                                                        Log.e(
-                                                            "FACEBOOK_LOGIN",
-                                                            "Google Firebase login FAILED",
-                                                            e
-                                                        )
+
 
                                                         Toast.makeText(
                                                             context,
@@ -463,11 +388,7 @@ fun LoginScreen(onNavigateToOtp: (String, String) -> Unit
 
                                         } catch (e: Exception) {
 
-                                            Log.e(
-                                                "FACEBOOK_LOGIN",
-                                                "Google linking ERROR",
-                                                e
-                                            )
+
 
                                             Toast.makeText(
                                                 context,
@@ -504,11 +425,7 @@ fun LoginScreen(onNavigateToOtp: (String, String) -> Unit
                         Toast.LENGTH_LONG
                     ).show()
 
-                    Log.e(
-                        "FACEBOOK_LOGIN",
-                        "Facebook callback lỗi",
-                        error
-                    )
+
                 }
             }
         )
@@ -538,10 +455,7 @@ fun LoginScreen(onNavigateToOtp: (String, String) -> Unit
     }
     fun sendGoogleTokenToBackend(idToken: String, photoUrl: String?) {
 
-        Log.d(
-            "GOOGLE_LOGIN",
-            "4. Bắt đầu gọi Backend với Firebase ID Token"
-        )
+
 
         CoroutineScope(Dispatchers.IO).launch {
             try {
@@ -561,10 +475,7 @@ fun LoginScreen(onNavigateToOtp: (String, String) -> Unit
                 val result = response.body()
                     ?: throw Exception("Backend không trả về dữ liệu")
 
-                Log.d(
-                    "GOOGLE_LOGIN",
-                    "BACKEND RESULT = $result"
-                )
+
 
                 // Chỉ lưu avatar khi tài khoản đã đăng nhập hoàn tất
                 if (
@@ -579,10 +490,7 @@ fun LoginScreen(onNavigateToOtp: (String, String) -> Unit
                         )
                     )
 
-                    Log.d(
-                        "PROVIDER_AVATAR",
-                        "Cập nhật avatar HTTP = ${avatarResponse.code()}"
-                    )
+
                 }
 
                 withContext(Dispatchers.Main) {
@@ -595,10 +503,7 @@ fun LoginScreen(onNavigateToOtp: (String, String) -> Unit
                         onNavigateToLinkPhone("Google", role)
                     } else {
 
-                        Log.d(
-                            "GOOGLE_LOGIN",
-                            "RESULT GMAIL = ${result.email}"
-                        )
+
 
                         onLoginSuccess(result)
                     }
@@ -606,11 +511,7 @@ fun LoginScreen(onNavigateToOtp: (String, String) -> Unit
 
             } catch (e: Exception) {
 
-                Log.e(
-                    "GOOGLE_LOGIN",
-                    "Gọi backend thất bại",
-                    e
-                )
+
 
                 withContext(Dispatchers.Main) {
                     Toast.makeText(
@@ -636,10 +537,7 @@ fun LoginScreen(onNavigateToOtp: (String, String) -> Unit
                 .addCredentialOption(googleOption)
                 .build()
 
-            Log.d(
-                "GOOGLE_LOGIN",
-                "Đang mở Google Sign-In"
-            )
+
 
             val result = credentialManager.getCredential(
                 context = context,
@@ -662,10 +560,7 @@ fun LoginScreen(onNavigateToOtp: (String, String) -> Unit
                 val googleIdToken =
                     googleCredential.idToken
 
-                Log.d(
-                    "GOOGLE_LOGIN",
-                    "1. Lấy Google ID Token SUCCESS"
-                )
+
 
                 val firebaseCredential =
                     GoogleAuthProvider.getCredential(
@@ -680,10 +575,7 @@ fun LoginScreen(onNavigateToOtp: (String, String) -> Unit
                             ?.photoUrl
                             ?.toString()
 
-                        Log.d(
-                            "GOOGLE_LOGIN",
-                            "2. Firebase Google login SUCCESS"
-                        )
+
 
                         auth.currentUser
                             ?.getIdToken(true)
@@ -694,10 +586,7 @@ fun LoginScreen(onNavigateToOtp: (String, String) -> Unit
 
                                 if (firebaseIdToken != null) {
 
-                                    Log.d(
-                                        "GOOGLE_LOGIN",
-                                        "3. Firebase ID Token SUCCESS"
-                                    )
+
 
                                     sendGoogleTokenToBackend(
                                         firebaseIdToken, googlePhotoUrl
@@ -714,11 +603,7 @@ fun LoginScreen(onNavigateToOtp: (String, String) -> Unit
                             }
                             ?.addOnFailureListener { e ->
 
-                                Log.e(
-                                    "GOOGLE_LOGIN",
-                                    "Lấy Firebase ID Token FAILED",
-                                    e
-                                )
+
 
                                 Toast.makeText(
                                     context,
@@ -729,11 +614,7 @@ fun LoginScreen(onNavigateToOtp: (String, String) -> Unit
                     }
                     .addOnFailureListener { e ->
 
-                        Log.e(
-                            "GOOGLE_LOGIN",
-                            "Firebase Google login FAILED",
-                            e
-                        )
+
 
                         Toast.makeText(
                             context,
@@ -744,10 +625,7 @@ fun LoginScreen(onNavigateToOtp: (String, String) -> Unit
 
             } else {
 
-                Log.e(
-                    "GOOGLE_LOGIN",
-                    "Credential không phải Google ID Token"
-                )
+
 
                 Toast.makeText(
                     context,
@@ -758,20 +636,11 @@ fun LoginScreen(onNavigateToOtp: (String, String) -> Unit
 
         } catch (e: Exception) {
 
-            Log.e(
-                "GOOGLE_LOGIN",
-                "Google login lỗi: ${e.javaClass.name}"
-            )
 
-            Log.e(
-                "GOOGLE_LOGIN",
-                "message = ${e.message}"
-            )
 
-            Log.e(
-                "GOOGLE_LOGIN",
-                "cause = ${e.cause}"
-            )
+
+
+
 
             Toast.makeText(
                 context,
@@ -827,6 +696,7 @@ fun LoginScreen(onNavigateToOtp: (String, String) -> Unit
                         token: PhoneAuthProvider.ForceResendingToken
                     ) {
                         OtpData.verificationId = verificationId
+                        OtpData.forceResendingToken = token
                         onNavigateToOtp(formattedPhone, role)
                     }
                 }

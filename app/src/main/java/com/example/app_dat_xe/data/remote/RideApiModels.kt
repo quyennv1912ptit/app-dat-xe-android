@@ -93,9 +93,51 @@ data class RideOfferPayload(
     val paymentMethod: String,
     val vehicle: RideVehiclePayload,
     val customer: RideCustomerPayload,
-    val note: String?
+    val note: String?,
+    val serverTimeOffsetMs: Long = 0L
 )
 
 data class RideAddressPayload(val lat: Double, val lng: Double, val address: String)
 data class RideVehiclePayload(val type: String, val transmission: String)
 data class RideCustomerPayload(val displayName: String, val rating: Double)
+
+data class RidePageResponse(
+    val content: List<RideSummaryData> = emptyList(),
+    val page: Int = 0,
+    val size: Int = 0,
+    val totalElements: Long = 0,
+    val totalPages: Int = 0,
+    val hasNext: Boolean = false
+)
+
+data class RideSummaryData(
+    val id: Long,
+    val pickupAddress: String? = null,
+    val dropoffAddress: String? = null,
+    val status: String,
+    val estimatedFare: Long = 0,
+    val finalFare: Long? = null,
+    val scheduledAt: String? = null
+)
+
+data class RideDetailData(
+    val id: Long = 0,
+    val customerId: Long = 0,
+    val driverId: Long? = null,
+    val vehicleId: Long = 0,
+    val pickupAddress: String? = null,
+    val pickup: RideCoordinateData = RideCoordinateData(),
+    val dropoffAddress: String? = null,
+    val dropoff: RideCoordinateData = RideCoordinateData(),
+    val estimatedFare: Long = 0,
+    val finalFare: Long? = null,
+    val status: String = "",
+    val handoverReports: List<RideHandoverReportData> = emptyList()
+)
+
+data class RideCoordinateData(val lat: Double? = null, val lng: Double? = null)
+data class RideHandoverReportData(
+    val phase: String = "",
+    val confirmedByCustomer: Boolean = false,
+    val odometer: Long = 0
+)

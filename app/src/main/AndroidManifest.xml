@@ -12,8 +12,9 @@
         <provider android:authorities="com.facebook.katana.provider.PlatformProvider" />
     </queries>
     <application
+        android:name=".App"
         android:allowBackup="true"
-        android:usesCleartextTraffic="true"
+        android:usesCleartextTraffic="${cleartextEnabled}"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules"
         android:icon="@mipmap/ic_launcher"
@@ -26,7 +27,7 @@
             android:value="@string/facebook_app_id" />
         <meta-data
             android:name="com.facebook.sdk.ClientToken"
-            android:value="@string/facebook_client_token" />
+            android:value="${facebookClientToken}" />
         <activity
             android:name=".MainActivity"
             android:exported="true"

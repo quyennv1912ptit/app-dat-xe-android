@@ -7,6 +7,8 @@ import retrofit2.http.GET
 import retrofit2.http.POST
 import retrofit2.http.Header
 import retrofit2.http.PUT
+import retrofit2.http.DELETE
+import retrofit2.http.Path
 import retrofit2.http.Query
 import okhttp3.MultipartBody
 import retrofit2.http.Multipart
@@ -16,6 +18,11 @@ interface ApiService {
     @POST("api/device-tokens")
     suspend fun registerDeviceToken(
         @Body request: DeviceTokenRequest
+    ): Response<String>
+
+    @DELETE("api/device-tokens/{installationId}")
+    suspend fun unregisterDeviceToken(
+        @Path("installationId") installationId: String
     ): Response<String>
 
     @POST("rides/estimate")
@@ -32,6 +39,17 @@ interface ApiService {
     suspend fun createRide(
         @Body request: CreateRideRequest
     ): Response<CreateRideResponse>
+
+    @GET("rides")
+    suspend fun listMyRides(
+        @Query("page") page: Int = 0,
+        @Query("size") size: Int = 100
+    ): Response<RidePageResponse>
+
+    @GET("rides/{rideId}")
+    suspend fun getRideDetail(
+        @Path("rideId") rideId: Long
+    ): Response<RideDetailData>
 
     @PUT("driver/me/availability")
     suspend fun setDriverAvailability(

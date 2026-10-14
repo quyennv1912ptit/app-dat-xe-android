@@ -20,14 +20,16 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.tasks.await
 
 class DriverLocationService : Service() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     @Volatile private var stompClient: RideStompClient? = null
+    private var trackingJob: Job? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
@@ -42,45 +44,38 @@ class DriverLocationService : Service() {
             return START_NOT_STICKY
         }
         startAsForeground()
-        if (serviceScope.isActive && stompClient == null) {
-            serviceScope.launch { trackDriver(driverId) }
+        if (serviceScope.isActive && trackingJob?.isActive != true) {
+            trackingJob = serviceScope.launch { trackDriver(driverId) }
         }
         return START_STICKY
     }
 
     private suspend fun trackDriver(driverId: Long) {
-        while (serviceScope.isActive) {
-            try {
-                var client = stompClient
-                if (client?.isConnected() != true) {
-                    client?.disconnect()
-                    val token = FirebaseAuth.getInstance().currentUser
-                        ?.getIdToken(false)?.await()?.token
-                    if (!token.isNullOrBlank()) {
-                        client = RideStompClient().also { newClient ->
-                            stompClient = newClient
-                            newClient.connect(
-                                firebaseIdToken = token,
-                                destinations = setOf("/user/queue/trip"),
-                                onPayload = RideEventBus::publish,
-                                onStateChanged = { connected, error ->
-                                    if (!connected && error != null) Log.w("DRIVER_STOMP", error)
-                                }
-                            )
-                        }
-                    }
-                }
-
-                val location = DeviceLocationProvider.currentLocation(this)
-                if (location != null) {
-                    client?.sendDriverLocation(driverId, location.latitude, location.longitude)
-                }
-            } catch (exception: CancellationException) {
-                throw exception
-            } catch (exception: Exception) {
-                Log.w("DRIVER_TRACKING", "Không thể gửi vị trí tài xế", exception)
+        try {
+            val token = FirebaseAuth.getInstance().currentUser?.getIdToken(false)?.await()?.token
+            if (token.isNullOrBlank()) {
+                Log.w("DRIVER_TRACKING", "Không lấy được token Firebase cho STOMP")
+                stopSelf()
+                return
             }
-            delay(5_000)
+            val client = RideStompClient().also { newClient ->
+                stompClient = newClient
+                newClient.connect(
+                    firebaseIdToken = token,
+                    destinations = setOf("/user/queue/trip"),
+                    onPayload = { destination, payload -> RideEventBus.publish(destination, payload) },
+                    onStateChanged = { connected, error ->
+                        if (!connected && error != null) Log.w("DRIVER_STOMP", error)
+                    }
+                )
+            }
+            DeviceLocationProvider.updates(this).collect { location ->
+                client.sendDriverLocation(driverId, location.latitude, location.longitude)
+            }
+        } catch (exception: CancellationException) {
+            throw exception
+        } catch (exception: Exception) {
+            Log.w("DRIVER_TRACKING", "Không thể theo dõi vị trí tài xế", exception)
         }
     }
 
@@ -109,6 +104,8 @@ class DriverLocationService : Service() {
     override fun onDestroy() {
         stompClient?.disconnect()
         stompClient = null
+        trackingJob?.cancel()
+        trackingJob = null
         serviceScope.cancel()
         super.onDestroy()
     }

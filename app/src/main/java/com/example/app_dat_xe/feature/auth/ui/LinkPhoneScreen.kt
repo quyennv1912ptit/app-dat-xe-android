@@ -28,6 +28,12 @@ import kotlin.time.Duration.Companion.milliseconds
 import android.app.Activity
 import android.widget.Toast
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.runtime.rememberCoroutineScope
+import com.example.app_dat_xe.data.remote.LinkPhoneRequest
+import com.example.app_dat_xe.data.remote.LoginResponse
+import com.example.app_dat_xe.data.remote.RetrofitClient
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.tasks.await
 import com.google.firebase.FirebaseException
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.PhoneAuthCredential
@@ -36,13 +42,19 @@ import com.google.firebase.auth.PhoneAuthProvider
 import java.util.concurrent.TimeUnit
 
 @Composable
-fun LinkPhoneScreen(provider: String, onNavigateToOtp: (String) -> Unit
-                    , onLoginSuccess: () -> Unit) {
+fun LinkPhoneScreen(
+    provider: String,
+    role: String,
+    onNavigateToOtp: (String) -> Unit,
+    onLoginSuccess: (LoginResponse) -> Unit
+) {
     var phoneNumber by remember { mutableStateOf("") }
     val context = LocalContext.current
     val activity = context as Activity
     val auth = FirebaseAuth.getInstance()
     val focusRequester = remember { FocusRequester() }
+    val scope = rememberCoroutineScope()
+    var isLinking by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         delay(100.milliseconds)
@@ -83,7 +95,7 @@ fun LinkPhoneScreen(provider: String, onNavigateToOtp: (String) -> Unit
 
         Button(
             onClick = {
-                if (phoneNumber.isBlank()) return@Button
+                if (phoneNumber.isBlank() || isLinking) return@Button
 
                 val formattedPhone =
                     if (phoneNumber.startsWith("0")) {
@@ -101,6 +113,32 @@ fun LinkPhoneScreen(provider: String, onNavigateToOtp: (String) -> Unit
                             override fun onVerificationCompleted(
                                 credential: PhoneAuthCredential
                             ) {
+                                if (isLinking) return
+                                isLinking = true
+                                scope.launch {
+                                    try {
+                                        val user = auth.currentUser
+                                            ?: throw IllegalStateException("Không tìm thấy tài khoản mạng xã hội")
+                                        user.linkWithCredential(credential).await()
+                                        val phoneToken = user.getIdToken(true).await().token
+                                            ?: throw IllegalStateException("Không lấy được token số điện thoại")
+                                        val providerToken = OtpData.providerIdToken
+                                            ?: throw IllegalStateException("Không tìm thấy token tài khoản mạng xã hội")
+                                        val response = RetrofitClient.api.linkPhone(
+                                            LinkPhoneRequest(providerToken, phoneToken, formattedPhone, role)
+                                        )
+                                        if (!response.isSuccessful) {
+                                            throw IllegalStateException("Không liên kết được số điện thoại (${response.code()})")
+                                        }
+                                        val login = response.body()
+                                            ?: throw IllegalStateException("Máy chủ chưa trả về tài khoản")
+                                        OtpData.clear()
+                                        onLoginSuccess(login)
+                                    } catch (exception: Exception) {
+                                        isLinking = false
+                                        Toast.makeText(context, exception.message ?: "Liên kết số điện thoại thất bại", Toast.LENGTH_LONG).show()
+                                    }
+                                }
                             }
                             override fun onVerificationFailed(
                                 e: FirebaseException
@@ -116,6 +154,7 @@ fun LinkPhoneScreen(provider: String, onNavigateToOtp: (String) -> Unit
                                 token: PhoneAuthProvider.ForceResendingToken
                             ) {
                                 OtpData.verificationId = verificationId
+                                OtpData.forceResendingToken = token
                                 onNavigateToOtp(formattedPhone)
                             }
                         }

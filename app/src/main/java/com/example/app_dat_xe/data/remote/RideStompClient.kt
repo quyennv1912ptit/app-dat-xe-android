@@ -16,7 +16,11 @@ class RideStompClient {
     private val mainHandler = Handler(Looper.getMainLooper())
     private val subscriptionId = AtomicInteger(1)
     private var socket: WebSocket? = null
-    private var connected = false
+    @Volatile private var connected = false
+    private var reconnectEnabled = false
+    private var reconnectTask: Runnable? = null
+    private var reconnectDelayMs = INITIAL_RECONNECT_DELAY_MS
+    private var firebaseIdToken: String? = null
     private var heartbeatTask: Runnable? = null
     private var destinations: Set<String> = emptySet()
     private var payloadListener: ((String, String) -> Unit)? = null
@@ -29,20 +33,29 @@ class RideStompClient {
         onPayload: (destination: String, payload: String) -> Unit,
         onStateChanged: (connected: Boolean, error: String?) -> Unit = { _, _ -> }
     ) {
-        if (socket != null) return
         this.destinations = destinations
         this.payloadListener = onPayload
         this.stateListener = onStateChanged
+        this.firebaseIdToken = firebaseIdToken
+        reconnectEnabled = true
+        reconnectTask?.let(mainHandler::removeCallbacks)
+        reconnectTask = null
+        if (socket == null) openSocket(firebaseIdToken)
+    }
+
+    @Synchronized
+    private fun openSocket(token: String) {
+        if (!reconnectEnabled || socket != null) return
         val request = Request.Builder()
             .url(RetrofitClient.STOMP_URL)
-            .header("Authorization", "Bearer $firebaseIdToken")
+            .header("Authorization", "Bearer $token")
             .header("Sec-WebSocket-Protocol", "v12.stomp")
             .build()
         socket = RetrofitClient.webSocketClient.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 webSocket.send(
                     "CONNECT\naccept-version:1.2\nheart-beat:10000,10000\n" +
-                        "Authorization:Bearer $firebaseIdToken\n\n\u0000"
+                        "Authorization:Bearer $token\n\n\u0000"
                 )
             }
 
@@ -50,19 +63,25 @@ class RideStompClient {
                 text.split('\u0000').forEach(::handleFrame)
             }
 
-            override fun onFailure(webSocket: WebSocket, throwable: Throwable, response: Response?) {
-                connected = false
-                socket = null
-                stopHeartbeats()
-                stateListener?.invoke(false, response?.message ?: throwable.message)
-                Log.w("RIDE_STOMP", "WebSocket STOMP thất bại", throwable)
+            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                synchronized(this@RideStompClient) {
+                    if (socket === webSocket) socket = null
+                    connected = false
+                    stopHeartbeats()
+                    stateListener?.invoke(false, response?.message ?: t.message)
+                    scheduleReconnect()
+                }
+                Log.w("RIDE_STOMP", "WebSocket STOMP thất bại", t)
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                connected = false
-                socket = null
-                stopHeartbeats()
-                stateListener?.invoke(false, reason)
+                synchronized(this@RideStompClient) {
+                    if (socket === webSocket) socket = null
+                    connected = false
+                    stopHeartbeats()
+                    stateListener?.invoke(false, reason)
+                    scheduleReconnect()
+                }
             }
         })
     }
@@ -89,34 +108,25 @@ class RideStompClient {
 
     @Synchronized
     fun disconnect() {
+        reconnectEnabled = false
+        reconnectTask?.let(mainHandler::removeCallbacks)
+        reconnectTask = null
         if (connected) socket?.send("DISCONNECT\n\n\u0000")
         connected = false
         stopHeartbeats()
         socket?.close(1000, "client disconnect")
         socket = null
+        firebaseIdToken = null
         payloadListener = null
         stateListener = null
     }
 
     private fun handleFrame(rawFrame: String) {
-        val frame = rawFrame.trim('\r', '\n')
-        if (frame.isBlank()) return
-        val lines = frame.split('\n')
-        val command = lines.firstOrNull()?.trim().orEmpty()
-        val headerEnd = lines.indexOfFirst { it.isBlank() }
-        val headers = if (headerEnd > 0) {
-            lines.subList(1, headerEnd).mapNotNull { line ->
-                val separator = line.indexOf(':')
-                if (separator <= 0) null else line.substring(0, separator) to line.substring(separator + 1)
-            }.toMap()
-        } else emptyMap()
-        val body = if (headerEnd >= 0 && headerEnd + 1 < lines.size) {
-            lines.subList(headerEnd + 1, lines.size).joinToString("\n")
-        } else ""
-
-        when (command) {
+        val parsed = parseStompFrame(rawFrame) ?: return
+        when (parsed.command) {
             "CONNECTED" -> {
                 connected = true
+                reconnectDelayMs = INITIAL_RECONNECT_DELAY_MS
                 destinations.forEach { destination ->
                     socket?.send(
                         "SUBSCRIBE\nid:${subscriptionId.getAndIncrement()}\n" +
@@ -126,8 +136,12 @@ class RideStompClient {
                 stateListener?.invoke(true, null)
                 startHeartbeats()
             }
-            "MESSAGE" -> headers["destination"]?.let { payloadListener?.invoke(it, body) }
-            "ERROR" -> stateListener?.invoke(false, body.ifBlank { "Lỗi STOMP từ máy chủ" })
+            "MESSAGE" -> parsed.headers["destination"]?.let { payloadListener?.invoke(it, parsed.body) }
+            "ERROR" -> {
+                connected = false
+                stateListener?.invoke(false, parsed.body.ifBlank { "Lỗi STOMP từ máy chủ" })
+                socket?.close(1000, "stomp error")
+            }
         }
     }
 
@@ -148,6 +162,28 @@ class RideStompClient {
     private fun stopHeartbeats() {
         heartbeatTask?.let(mainHandler::removeCallbacks)
         heartbeatTask = null
+    }
+
+    @Synchronized
+    private fun scheduleReconnect() {
+        if (!reconnectEnabled || reconnectTask != null) return
+        val waitMs = reconnectDelayMs
+        reconnectDelayMs = (reconnectDelayMs * 2).coerceAtMost(MAX_RECONNECT_DELAY_MS)
+        val task = Runnable {
+            synchronized(this) {
+                reconnectTask = null
+                if (reconnectEnabled && socket == null) {
+                    firebaseIdToken?.let(::openSocket)
+                }
+            }
+        }
+        reconnectTask = task
+        mainHandler.postDelayed(task, waitMs)
+    }
+
+    companion object {
+        private const val INITIAL_RECONNECT_DELAY_MS = 1_000L
+        private const val MAX_RECONNECT_DELAY_MS = 30_000L
     }
 }
 

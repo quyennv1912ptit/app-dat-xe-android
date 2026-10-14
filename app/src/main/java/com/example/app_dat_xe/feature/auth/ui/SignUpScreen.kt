@@ -14,7 +14,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.text.ClickableText
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -166,21 +165,10 @@ fun SignUpScreen(role: String, onSignUpSuccess: (LoginResponse) -> Unit) {
                 onCheckedChange = { isAgreed = it }
             )
 
-            ClickableText(
+            Text(
                 text = annotatedTermsString,
                 style = MaterialTheme.typography.bodyMedium.copy(color = Color.Gray),
-                modifier = Modifier.padding(start = 4.dp),
-                onClick = { offset ->
-                    val isTermsClicked = annotatedTermsString
-                        .getStringAnnotations(tag = "TERMS", start = offset, end = offset)
-                        .firstOrNull() != null
-
-                    if (isTermsClicked) {
-                        showTermsDialog = true
-                    } else {
-                        isAgreed = !isAgreed
-                    }
-                }
+                modifier = Modifier.padding(start = 4.dp).clickable { showTermsDialog = true }
             )
         }
 

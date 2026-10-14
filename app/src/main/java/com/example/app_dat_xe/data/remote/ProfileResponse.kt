@@ -7,5 +7,7 @@ data class ProfileResponse(
     val email: String?,
     val phoneNumber: String?,
     val avatarUrl: String?,
-    val role: String?
+    val role: String?,
+    val licenseVerified: Boolean? = null,
+    val approvalStatus: String? = null
 )

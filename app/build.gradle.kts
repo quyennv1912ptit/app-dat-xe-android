@@ -74,8 +74,10 @@ dependencies {
 
     implementation(platform("com.google.firebase:firebase-bom:34.2.0"))
     implementation("com.google.firebase:firebase-auth")
+    implementation("com.google.firebase:firebase-messaging")
     implementation("com.google.firebase:firebase-storage")
     implementation("com.google.android.gms:play-services-auth:21.4.0")
+    implementation("com.google.android.gms:play-services-location:21.3.0")
     implementation("com.facebook.android:facebook-login:18.3.0")
 
     testImplementation(libs.junit)

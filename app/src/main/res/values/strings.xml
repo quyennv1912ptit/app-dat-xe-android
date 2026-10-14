@@ -4,4 +4,6 @@
     <string name="fb_login_protocol_scheme">fb1127438829808752</string>
     <string name="facebook_client_token">a659269eacb51d5a26ba44420597c9e8</string>
     <string name="default_web_client_id">833652173765-6vni5a030nf9mhtj4egrvq5vnkhanss4.apps.googleusercontent.com</string>
+    <string name="cloudinary_cloud_name" translatable="false">CONFIGURE_CLOUDINARY_CLOUD_NAME</string>
+    <string name="cloudinary_unsigned_upload_preset" translatable="false">CONFIGURE_UNSIGNED_UPLOAD_PRESET</string>
 </resources>

@@ -247,6 +247,7 @@ fun AppNavigation() {
         composable("main") {
 
             MainScreen(
+                userId = loginResponse?.id,
                 fullName = loginResponse?.fullName,
                 phoneNumber = loginResponse?.phoneNumber,
                 email = loginResponse?.email,
